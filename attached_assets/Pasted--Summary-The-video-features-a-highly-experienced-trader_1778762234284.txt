@@ -1,0 +1,61 @@
+### Summary
+
+The video features a highly experienced trader who shares insights from one of his most profitable day trading sessions during a world trading championship. He achieved a **350% return over 9 months** and was ranked three times globally in the day trading division, including two vice championships. The focus of this session is on the application of **volume-based analysis** alongside price action to anticipate market movements, specifically during a **NASDAQ market collapse**.
+
+### Core Concepts and Trading Strategy
+
+- **Market Conditions**: The market was initially balanced with no clear directional bias based on price action alone.
+- **Price Action vs. Volume**: Solely relying on price action can be misleading during balanced markets. Volume indicators, particularly the **Cumulative Volume Delta (CVD)** and **Volume Spread Analysis (VSA)**, reveal underlying pressure and provide early signals.
+- **Cumulative Volume Delta (CVD)**: This indicator tracks the net difference between buying and selling volume, showing when accumulation or distribution occurs. In this session, CVD indicated strong selling pressure before the price breakout.
+- **Auction Market Theory**: The trader applies this to identify sell model days and to confirm trends through volume and price interplay.
+- **Big Trades Indicator**: A proprietary tool used to detect where large market players are pushing prices, adding further confirmation to the volume analysis.
+- **Risk and Position Management**: The trader emphasizes **low drawdown** and **scaling positions**. He moves his stop loss to break-even after initial favorable moves, allowing for a risk-reward ratio reaching as high as **1:5**.
+  
+### Timeline of the Trading Session and Key Events
+
+| Time Frame                  | Event Description                                                                                  | Key Insight                                                                                  |
+|-----------------------------|--------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| Pre-market (around 12 CET)   | Market balanced, no clear price direction. Volume starts to show selling pressure (distribution). | Volume leads price; early indication of upcoming downward breakout.                         |
+| First breakout candle        | Confirmation of volume pressure with price action following; first short position opened.        | Entry point with strong volume confirmation; risk managed tightly with stop loss to break even. |
+| Subsequent trades            | Multiple short positions added/traded during strong downward movement.                            | Positions trailed profitably with careful risk management; profit partially risked again.    |
+| Redistribution phase         | Market shows signs of redistribution; big trades stop pushing price down.                         | Trader closes some positions to lock in profit, waits for next clear signal.                 |
+| Final major short trade      | Volume spread analysis shows buyers hitting resistance (price pressure zero), confirming shorts. | Entry based on volume rejection; market continues to push lower to new daily lows.           |
+| End of session (around 4 PM) | Positions closed near low of the day; session ends with substantial profits.                      | Final profits secured after strong directional move confirmed by volume and big trades data.|
+
+### Key Insights
+
+- **Volume analysis provides a leading edge over price action alone**, especially in balanced or uncertain market conditions.
+- The **Cumulative Volume Delta** helps distinguish between **accumulation (buying)** and **distribution (selling)** phases, which is crucial for anticipating breakouts or breakdowns.
+- **Volume Spread Analysis (VSA)** helps identify when buyers or sellers are losing strength, signaling potential reversals or continuation.
+- The trader’s **proprietary "Big Trades" indicator** highlights the activity of large market participants, offering additional confirmation for trade entries and exits.
+- Careful **risk management** by moving stop losses to break-even and scaling positions maximizes gains while minimizing drawdown.
+- The session exemplifies a **sell model day** where volume and price analysis aligned to provide multiple high-probability short trades.
+
+### Definitions and Concepts
+
+| Term                     | Definition                                                                                  |
+|--------------------------|---------------------------------------------------------------------------------------------|
+| Cumulative Volume Delta (CVD) | The net difference between buying volume and selling volume, indicating market pressure.     |
+| Volume Spread Analysis (VSA)   | A method analyzing the relationship between volume and price spread to determine market strength or weakness. |
+| Auction Market Theory      | A framework interpreting price movements as an auction process to identify value areas, balance, and trends. |
+| Distribution             | A market phase where large sellers are offloading positions, often leading to downward price moves. |
+| Accumulation             | A market phase where large buyers are building positions, often preceding upward trends.     |
+
+### Conclusions
+
+- **Integrating volume-based indicators such as CVD and Big Trades with price action enables more reliable trade signals than price action alone.**
+- **Volume often leads price, revealing hidden pressures that presage market moves.**
+- The trader’s approach, combining **advanced volume analysis**, **auction market theory**, and **strict risk management**, results in highly profitable trades in volatile conditions.
+- This session underscores the importance of understanding **market microstructure** and **institutional activity** for day trading success.
+
+### Keywords
+
+- Cumulative Volume Delta (CVD)  
+- Volume Spread Analysis (VSA)  
+- Auction Market Theory  
+- Distribution and Accumulation  
+- Big Trades Indicator  
+- Risk Management  
+- NASDAQ Market Collapse  
+- Day Trading  
+- Volume-Price Relationship
