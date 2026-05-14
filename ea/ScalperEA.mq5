@@ -35,6 +35,7 @@
 input group "=== General ==="
 input ulong    InpMagic           = 20240101;   // Magic number
 input string   InpComment         = "ScalperEA";// Order comment
+input bool     InpDebug           = false;       // Enable verbose debug logging
 
 // --- Trading Session (GMT) ---
 input group "=== Session (GMT Hours) ==="
@@ -92,8 +93,34 @@ int            g_cooldown    = 0;  // Bars remaining in cooldown
 bool           g_tp1Done[];        // Per-position TP1 partial close flag
 
 bool           g_tradingAllowed = true;  // Daily risk gate
-double         g_dayOpenBalance = 0;      // Balance recorded at session open (for intraday DD)
-int            g_lastDayOfWeek  = -1;     // Track day boundary for DD reset
+double         g_dayOpenBalance = 0;     // Balance recorded at session open (for intraday DD)
+int            g_lastDayOfWeek  = -1;   // Track day boundary for DD reset
+
+bool           g_debugMode = false;     // Runtime copy of InpDebug (used by .mqh modules)
+
+//====================================================================
+//  Debug helper — only prints when InpDebug is true.
+//  Format: [DBG][HH:MM:SS]  — easy to filter in MT5 Journal tab.
+//====================================================================
+void DBG(string msg)
+{
+   if(!g_debugMode) return;
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   Print(StringFormat("[DBG][%02d:%02d:%02d] %s", dt.hour, dt.min, dt.sec, msg));
+}
+
+//====================================================================
+//  Returns current spread in pips for any pair/symbol
+//====================================================================
+double GetSpreadPips(string symbol)
+{
+   double spread = (double)SymbolInfoInteger(symbol, SYMBOL_SPREAD)
+                   * SymbolInfoDouble(symbol, SYMBOL_POINT);
+   bool   oddDigits = (SymbolInfoInteger(symbol, SYMBOL_DIGITS) % 2 == 1);
+   double pip = SymbolInfoDouble(symbol, SYMBOL_POINT) * (oddDigits ? 10.0 : 1.0);
+   return (pip > 0) ? spread / pip : spread / 0.0001;
+}
 
 //====================================================================
 //  HELPER: minutes → ENUM_TIMEFRAMES
@@ -191,6 +218,8 @@ void RebuildVolumeProfile(string symbol)
 //====================================================================
 int OnInit()
 {
+   g_debugMode = InpDebug;   // propagate to all .mqh modules (same compilation unit)
+
    g_ofTF = MinutesToTF(InpOFTF_Minutes);
    g_vpTF = MinutesToTF(InpVPTF_Minutes);
 
@@ -209,7 +238,8 @@ int OnInit()
 
    Print("ScalperEA v1.00 initialised on ", Symbol(),
          " | OF TF: ", EnumToString(g_ofTF),
-         " | VP TF: ", EnumToString(g_vpTF));
+         " | VP TF: ", EnumToString(g_vpTF),
+         " | Debug: ", g_debugMode ? "ON" : "OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -231,9 +261,34 @@ void OnTick()
    // Only process logic on a new bar (bar-close confirmed signals)
    if(!IsNewBar(symbol, g_ofTF)) return;
 
+   // ---- Debug: new bar header ----
+   if(g_debugMode)
+   {
+      double bid        = SymbolInfoDouble(symbol, SYMBOL_BID);
+      double ask        = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      double spreadPips = GetSpreadPips(symbol);
+      DBG(StringFormat("========== NEW BAR [%s] %s ==========",
+                        symbol, TimeToString(iTime(symbol, g_ofTF, 0), TIME_DATE|TIME_MINUTES)));
+      DBG(StringFormat("Bid=%.5f  Ask=%.5f  Spread=%.2f pips", bid, ask, spreadPips));
+   }
+
    // ---- Daily risk checks ----
+   if(g_debugMode)
+   {
+      double bal    = AccountInfoDouble(ACCOUNT_BALANCE);
+      double eq     = AccountInfoDouble(ACCOUNT_EQUITY);
+      double refBal = (g_dayOpenBalance > 0) ? g_dayOpenBalance : bal;
+      double dd     = (refBal > 0) ? (refBal - eq) / refBal * 100.0 : 0;
+      double prof   = (refBal > 0) ? (eq - refBal) / refBal * 100.0 : 0;
+      DBG(StringFormat("Account: Bal=%.2f  Equity=%.2f  DayOpen=%.2f  DrawDn=%.2f%%/%.0f%%  Profit=%.2f%%/%.0f%%",
+                        bal, eq, g_dayOpenBalance,
+                        dd, InpMaxDailyDD * 100.0,
+                        prof, InpDailyProfitStop * 100.0));
+   }
+
    if(DailyDrawdownBreached(InpMaxDailyDD, g_dayOpenBalance))
    {
+      DBG("DAILY DD LIMIT HIT → closing all positions, trading halted for today");
       if(g_tradingAllowed)
       {
          Print("ScalperEA: Daily drawdown limit reached — closing all & stopping.");
@@ -244,6 +299,7 @@ void OnTick()
    }
    if(DailyProfitTargetHit(InpDailyProfitStop, g_dayOpenBalance))
    {
+      DBG("DAILY PROFIT TARGET HIT → closing all positions, locking gains");
       if(g_tradingAllowed)
       {
          Print("ScalperEA: Daily profit target hit — locking in gains.");
@@ -255,10 +311,29 @@ void OnTick()
    g_tradingAllowed = true;
 
    // ---- Session filter ----
-   if(!IsInSession()) return;
+   {
+      bool inSession = IsInSession();
+      if(g_debugMode)
+      {
+         MqlDateTime dtNow; TimeToStruct(TimeCurrent(), dtNow);
+         DBG(StringFormat("Session: %s (GMT hour=%d, window=%d-%d)",
+                           inSession ? "IN SESSION ✓" : "OUT OF SESSION — skipping bar",
+                           dtNow.hour, InpNYOpenHour, InpNYCloseHour));
+      }
+      if(!inSession) return;
+   }
 
    // ---- Spread filter ----
-   if(!SpreadOK(symbol)) return;
+   {
+      bool spreadOk    = SpreadOK(symbol);
+      double spreadNow = GetSpreadPips(symbol);
+      if(g_debugMode)
+         DBG(StringFormat("Spread: %.2f pips — %s (limit %.1f pips)",
+                           spreadNow,
+                           spreadOk ? "OK ✓" : "TOO WIDE → skipping bar",
+                           InpSpreadMaxPips));
+      if(!spreadOk) return;
+   }
 
    // ---- Track day open balance for accurate intraday drawdown ----
    {
@@ -270,6 +345,8 @@ void OnTick()
          g_lastDayOfWeek  = dt.day_of_week;
          g_tradingAllowed = true;   // Reset daily gate each new day
          ResetOpeningRange(g_orb);  // New day — fresh ORB
+         DBG(StringFormat("NEW TRADING DAY detected — DayOpenBalance recorded = %.2f, ORB reset",
+                           g_dayOpenBalance));
       }
    }
 
@@ -277,22 +354,51 @@ void OnTick()
    if(InpORBEnabled)
    {
       UpdateOpeningRange(g_orb, symbol, g_ofTF, InpNYOpenHour, InpORBMinutes);
-      // CRITICAL: check for breakout on every bar after ORB is formed
       if(g_orb.isFormed)
          CheckORBBreakout(g_orb, symbol, g_ofTF);
+   }
+   if(g_debugMode)
+   {
+      if(InpORBEnabled)
+         DBG(StringFormat("ORB: %s | Hi=%.5f Lo=%.5f Mid=%.5f | BreakoutUp=%s BreakoutDown=%s",
+                           g_orb.isFormed ? "FORMED ✓" : "NOT YET FORMED (waiting)",
+                           g_orb.high, g_orb.low, (g_orb.high + g_orb.low) / 2.0,
+                           g_orb.breakoutUp   ? "YES" : "no",
+                           g_orb.breakoutDown ? "YES" : "no"));
+      else
+         DBG("ORB: DISABLED");
    }
 
    // ---- Rebuild volume profile (once per bar on VP timeframe) ----
    RebuildVolumeProfile(symbol);
+   if(g_debugMode)
+   {
+      if(InpVPEnabled && g_vp.isValid)
+      {
+         double pr    = iClose(symbol, g_ofTF, 1);
+         string vaLoc = (pr >= g_vp.val && pr <= g_vp.vah) ? "INSIDE value area" :
+                        (pr  > g_vp.vah)                   ? "ABOVE value area (imbalance up)" :
+                                                             "BELOW value area (imbalance dn)";
+         DBG(StringFormat("VP: VALID ✓ | POC=%.5f  VAH=%.5f  VAL=%.5f | Price(bar1)=%.5f — %s",
+                           g_vp.poc, g_vp.vah, g_vp.val, pr, vaLoc));
+         DBG(StringFormat("VP: LVN count=%d | Total session volume=%.0f",
+                           g_vp.lvnCount, g_vp.totalVolume));
+      }
+      else
+         DBG(InpVPEnabled ? "VP: INVALID (not enough bars yet)" : "VP: DISABLED");
+   }
 
    // ---- Manage existing positions ----
    int openPos = CountOpenPositions(symbol, InpMagic);
+   DBG(StringFormat("Open positions: %d/%d | Cooldown: %d bars remaining",
+                     openPos, InpMaxPositions, g_cooldown));
+
    if(openPos > 0)
    {
-      // Ensure tp1Done array is large enough
       if(ArraySize(g_tp1Done) < openPos)
          ArrayResize(g_tp1Done, openPos + 2);
 
+      DBG("--- Managing open positions (BE / trail / partial close) ---");
       ManagePositions(g_trade, g_pos, symbol, InpMagic, g_ofTF,
                       InpBEATRMult, InpTrailATRMult, InpTP1ATRMult, g_tp1Done);
    }
@@ -300,51 +406,76 @@ void OnTick()
    // ---- Cooldown check ----
    if(InpCooldownBars && g_cooldown > 0)
    {
+      DBG(StringFormat("Cooldown active — %d bars remaining → skipping entry this bar", g_cooldown));
       g_cooldown--;
       return;
    }
 
    // ---- Entry logic ----
-   if(openPos >= InpMaxPositions) return;
+   if(openPos >= InpMaxPositions)
+   {
+      DBG(StringFormat("Max positions (%d) already open → no new entry", InpMaxPositions));
+      return;
+   }
 
-   // Evaluate all strategy layers
+   // ---- Evaluate all strategy layers ----
+   DBG("--- EvaluateEntry ---");
    EntrySignal sig = EvaluateEntry(symbol, g_ofTF, g_vp, g_orb,
                                    InpRiskPct, InpSLATRMult);
 
    // Apply direction filters
-   if(sig.direction > 0 && !InpAllowLong)  sig.direction = 0;
-   if(sig.direction < 0 && !InpAllowShort) sig.direction = 0;
+   if(sig.direction > 0 && !InpAllowLong)
+   {
+      DBG("Long blocked by InpAllowLong=false");
+      sig.direction = 0;
+   }
+   if(sig.direction < 0 && !InpAllowShort)
+   {
+      DBG("Short blocked by InpAllowShort=false");
+      sig.direction = 0;
+   }
 
    // Confluence gate
-   if(sig.confluence < InpMinConfluence) sig.direction = 0;
+   if(sig.direction != 0 && sig.confluence < InpMinConfluence)
+   {
+      DBG(StringFormat("Confluence %d < minimum %d → no trade this bar",
+                        sig.confluence, InpMinConfluence));
+      sig.direction = 0;
+   }
 
-   if(sig.direction == 0) return;
+   if(sig.direction == 0)
+   {
+      DBG(StringFormat("No valid signal | Reason: [%s]",
+                        sig.reason != "" ? sig.reason : "none"));
+      return;
+   }
 
    // ORB: only enter after ORB is formed (if ORB is enabled)
-   if(InpORBEnabled && !g_orb.isFormed) return;
+   if(InpORBEnabled && !g_orb.isFormed)
+   {
+      DBG("ORB not yet formed — waiting before entry");
+      return;
+   }
 
-   // Place trade
-   Print("ScalperEA Signal | ", symbol,
-         " Dir: ", sig.direction > 0 ? "LONG" : "SHORT",
-         " Conf: ", sig.confluence,
-         " SL: ", sig.stopLoss,
-         " TP1: ", sig.tp1, " TP2: ", sig.tp2,
-         " Reason: [", sig.reason, "]");
+   // ---- Signal confirmed — log and place trade ----
+   string dirStr = (sig.direction > 0) ? "LONG" : "SHORT";
+   Print(StringFormat("ScalperEA SIGNAL | %s %s | Conf=%d | Entry=%.5f SL=%.5f TP1=%.5f TP2=%.5f | [%s]",
+                       symbol, dirStr, sig.confluence,
+                       sig.entryPrice, sig.stopLoss, sig.tp1, sig.tp2, sig.reason));
 
    ulong deal = PlaceTrade(g_trade, sig, symbol, InpRiskPct, InpMagic, InpComment);
 
    if(deal > 0)
    {
-      Print("ScalperEA: Trade placed. Deal #", deal);
-
-      // After entry: set the second TP as a separate pending limit? 
-      // Instead we trail into TP2 — no second order needed.
-
-      // Reset cooldown
+      Print(StringFormat("ScalperEA: Trade placed. Deal #%I64u | %s %s", deal, symbol, dirStr));
       g_cooldown = InpCooldownBarsCnt;
-
-      // Reset TP1 done flag for new positions
       ArrayInitialize(g_tp1Done, false);
+      DBG(StringFormat("Cooldown set to %d bars after entry", InpCooldownBarsCnt));
+   }
+   else
+   {
+      DBG(StringFormat("Trade placement FAILED — retcode %d: %s",
+                        g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
    }
 }
 

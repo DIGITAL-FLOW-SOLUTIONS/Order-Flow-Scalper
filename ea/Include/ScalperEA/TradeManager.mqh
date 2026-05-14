@@ -76,17 +76,33 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
    double pts   = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int    digits= (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
 
-   if(atr <= 0) return sig;
+   if(g_debugMode) DBG(StringFormat("  ATR=%.5f | Price(bar1)=%.5f", atr, price));
+
+   if(atr <= 0)
+   {
+      DBG("  ATR=0 — cannot evaluate, skipping bar");
+      return sig;
+   }
 
    // ---------------------------------------------------------------
    // 1. Order Flow Score
    // ---------------------------------------------------------------
    int ofScore = GetOrderFlowScore(symbol, tf);
+   if(g_debugMode)
+      DBG(StringFormat("  [OF ] OrderFlow score=%+d  (long needs >%d, short needs <%d)",
+                        ofScore, SIG_MIN_OF_SCORE - 1, -(SIG_MIN_OF_SCORE - 1)));
 
    // ---------------------------------------------------------------
    // 2. Volume Profile bias
    // ---------------------------------------------------------------
    int vpBias = VPBias(vp, price, atr);
+   if(g_debugMode)
+   {
+      string vpStr = vp.isValid
+         ? StringFormat("POC=%.5f VAH=%.5f VAL=%.5f", vp.poc, vp.vah, vp.val)
+         : "VP not valid";
+      DBG(StringFormat("  [VP ] Bias=%+d | %s", vpBias, vpStr));
+   }
 
    // ---------------------------------------------------------------
    // 3. ORB signal: either breakout or mean-reversion
@@ -99,22 +115,44 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
       if(orbSignal == 0)
          orbSignal = CheckORBMeanReversion(orb, price);
    }
+   if(g_debugMode)
+      DBG(StringFormat("  [ORB] Signal=%+d | Formed=%s BrkUp=%s BrkDn=%s | Hi=%.5f Lo=%.5f",
+                        orbSignal,
+                        orb.isFormed      ? "Y" : "N",
+                        orb.breakoutUp    ? "Y" : "N",
+                        orb.breakoutDown  ? "Y" : "N",
+                        orb.high, orb.low));
 
    // ---------------------------------------------------------------
    // 4. Absorption at current bar
    // ---------------------------------------------------------------
    int absDir = 0;
    bool hasAbsorption = IsAbsorption(symbol, tf, 1, absDir);
+   if(g_debugMode)
+      DBG(StringFormat("  [ABS] Absorption=%s dir=%+d",
+                        hasAbsorption ? "YES" : "no", absDir));
 
    // ---------------------------------------------------------------
    // 5. Exhaustion — acts as a FILTER (blocks entry in that direction)
    // ---------------------------------------------------------------
    int exhaustion = IsExhaustion(symbol, tf);
+   if(g_debugMode)
+      DBG(StringFormat("  [EXH] Exhaustion=%+d %s",
+                        exhaustion,
+                        exhaustion == 0 ? "(none)" :
+                        exhaustion > 0  ? "(upside exhaustion — would block LONG)" :
+                                          "(downside exhaustion — would block SHORT)"));
 
    // ---------------------------------------------------------------
    // 6. Delta divergence
    // ---------------------------------------------------------------
    int deltaDivergence = CalcDeltaDivergence(symbol, tf);
+   if(g_debugMode)
+      DBG(StringFormat("  [DDV] DeltaDivergence=%+d %s",
+                        deltaDivergence,
+                        deltaDivergence == 0 ? "(neutral)" :
+                        deltaDivergence > 0  ? "(hidden bullish pressure)" :
+                                               "(hidden bearish pressure)"));
 
    // ---------------------------------------------------------------
    // Aggregate direction vote
@@ -138,7 +176,10 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
    if(deltaDivergence <  0) { shortVotes++; sig.reason += "DeltaDiv_Bear "; }
 
    // Book sweep lowers conviction (thin liquidity — skip entry)
-   if(IsBookSweep(symbol, tf, 1))
+   bool bookSweep = IsBookSweep(symbol, tf, 1);
+   if(g_debugMode)
+      DBG(StringFormat("  [BSW] BookSweep=%s", bookSweep ? "YES — skipping entry" : "no"));
+   if(bookSweep)
    {
       sig.reason += "BookSweep_Skip ";
       return sig;
@@ -146,8 +187,15 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
 
    // Exhaust filter: if exhaustion matches proposed direction → block
    int dominantDir = (longVotes > shortVotes) ? 1 : (shortVotes > longVotes) ? -1 : 0;
+   if(g_debugMode)
+      DBG(StringFormat("  VOTES → Long=%d  Short=%d | Dominant=%s",
+                        longVotes, shortVotes,
+                        dominantDir > 0 ? "LONG" : dominantDir < 0 ? "SHORT" : "FLAT/TIE"));
+
    if(exhaustion != 0 && exhaustion == dominantDir)
    {
+      if(g_debugMode)
+         DBG(StringFormat("  Exhaustion (%+d) matches dominant direction → BLOCKED", exhaustion));
       sig.reason += "Exhaustion_Block ";
       return sig;
    }
@@ -156,6 +204,10 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
    // Minimum confluence gate
    // ---------------------------------------------------------------
    int confluence = (dominantDir > 0) ? longVotes : shortVotes;
+   if(g_debugMode)
+      DBG(StringFormat("  Confluence=%d (min gate=%d) — %s",
+                        confluence, SIG_MIN_CONFLUENCE,
+                        confluence >= SIG_MIN_CONFLUENCE ? "PASSES ✓" : "BELOW threshold → no signal"));
    if(confluence < SIG_MIN_CONFLUENCE) return sig;
 
    // ---------------------------------------------------------------
@@ -169,19 +221,20 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
 
    // Stop loss: ATR-based behind entry
    double slDist = slATRMultiple * atr;
+   string slSource = "ATR";
 
    // Tighten SL if we have an ORB reference
    if(orb.isFormed && orb.breakoutUp && dominantDir > 0)
    {
       double orbSL = ORBInvalidationLevel(orb, 1, atr);
       double dist  = sig.entryPrice - orbSL;
-      if(dist > 0 && dist < slDist) slDist = dist;
+      if(dist > 0 && dist < slDist) { slDist = dist; slSource = "ORB_invalidation"; }
    }
    else if(orb.isFormed && orb.breakoutDown && dominantDir < 0)
    {
       double orbSL = ORBInvalidationLevel(orb, -1, atr);
       double dist  = orbSL - sig.entryPrice;
-      if(dist > 0 && dist < slDist) slDist = dist;
+      if(dist > 0 && dist < slDist) { slDist = dist; slSource = "ORB_invalidation"; }
    }
 
    if(dominantDir > 0)
@@ -204,14 +257,22 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
       ORBProfitTargets(orb, dominantDir, orbTP1, orbTP2);
       sig.tp1 = NormalizeDouble(orbTP1, digits);
       sig.tp2 = NormalizeDouble(orbTP2, digits);
+      if(g_debugMode) DBG("  TP targets overridden by ORB projection");
    }
+
+   if(g_debugMode)
+      DBG(StringFormat("  → SIGNAL: %s | Conf=%d | Entry=%.5f SL=%.5f (dist=%.5f via %s) TP1=%.5f TP2=%.5f | [%s]",
+                        dominantDir > 0 ? "LONG ▲" : "SHORT ▼",
+                        confluence,
+                        sig.entryPrice, sig.stopLoss, slDist, slSource,
+                        sig.tp1, sig.tp2, sig.reason));
 
    return sig;
 }
 
 //--------------------------------------------------------------------
 //  Place a trade from an EntrySignal
-//  Returns ticket number or 0 on failure
+//  Returns deal ticket number or 0 on failure
 //--------------------------------------------------------------------
 ulong PlaceTrade(CTrade &trade, const EntrySignal &sig,
                  string symbol, double riskPct,
@@ -225,6 +286,13 @@ ulong PlaceTrade(CTrade &trade, const EntrySignal &sig,
    double lots = CalcLotSize(symbol, riskPct, slPoints);
    if(lots <= 0) return 0;
 
+   if(g_debugMode)
+      DBG(StringFormat("PlaceTrade: %s %.2f lots | Entry=%.5f  SL=%.5f  TP1=%.5f  TP2=%.5f | SL=%.1f pts | Risk=%.2f%%",
+                        sig.direction > 0 ? "BUY" : "SELL", lots,
+                        sig.entryPrice, sig.stopLoss, sig.tp1, sig.tp2,
+                        slPoints / SymbolInfoDouble(symbol, SYMBOL_POINT),
+                        riskPct * 100.0));
+
    trade.SetExpertMagicNumber(magic);
    trade.SetDeviationInPoints(10);
    trade.SetTypeFilling(ORDER_FILLING_IOC);
@@ -237,10 +305,14 @@ ulong PlaceTrade(CTrade &trade, const EntrySignal &sig,
 
    if(!ok)
    {
-      Print("ScalperEA: Order failed ", trade.ResultRetcode(),
-            " ", trade.ResultRetcodeDescription());
+      Print(StringFormat("ScalperEA: Order FAILED retcode=%d: %s",
+                          trade.ResultRetcode(), trade.ResultRetcodeDescription()));
       return 0;
    }
+
+   if(g_debugMode)
+      DBG(StringFormat("PlaceTrade: ORDER SENT OK → Deal #%I64u  Price=%.5f",
+                        trade.ResultDeal(), trade.ResultPrice()));
 
    return trade.ResultDeal();
 }
@@ -263,24 +335,58 @@ void ManagePositions(CTrade &trade, CPositionInfo &pos,
       if(PositionGetInteger(POSITION_MAGIC) != (long)magic) continue;
 
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      double curPrice  = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-                        ? SymbolInfoDouble(symbol, SYMBOL_BID)
-                        : SymbolInfoDouble(symbol, SYMBOL_ASK);
-      double atr  = CalcATR(symbol, tf);
+      double curSL     = PositionGetDouble(POSITION_SL);
+      double curTP     = PositionGetDouble(POSITION_TP);
+      double volume    = PositionGetDouble(POSITION_VOLUME);
+      bool   isBuy     = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double curPrice  = isBuy ? SymbolInfoDouble(symbol, SYMBOL_BID)
+                               : SymbolInfoDouble(symbol, SYMBOL_ASK);
+      double atr   = CalcATR(symbol, tf);
       double profit= PositionGetDouble(POSITION_PROFIT);
+      double pts   = SymbolInfoDouble(symbol, SYMBOL_POINT);
 
-      // Move to break-even first
+      if(g_debugMode)
+      {
+         double pipFactor = (SymbolInfoInteger(symbol, SYMBOL_DIGITS) % 2 == 1) ? 10.0 : 1.0;
+         double floatPips = (isBuy ? curPrice - openPrice : openPrice - curPrice)
+                            / (pts * pipFactor);
+         DBG(StringFormat("  [Pos #%I64u] %s | Open=%.5f  Cur=%.5f  SL=%.5f  TP=%.5f | "
+                           "ATR=%.5f | Vol=%.2f | P&L=%.2f (%.1f pips)",
+                           ticket, isBuy ? "BUY" : "SELL",
+                           openPrice, curPrice, curSL, curTP,
+                           atr, volume, profit, floatPips));
+      }
+
+      // ---- Move to break-even ----
+      double slBefore = PositionGetDouble(POSITION_SL);
       MoveToBreakEven(trade, pos, ticket, beATRMult, symbol, tf);
+      if(g_debugMode)
+      {
+         // Re-select to check if SL changed
+         if(PositionSelectByTicket(ticket))
+         {
+            double slAfter = PositionGetDouble(POSITION_SL);
+            if(MathAbs(slAfter - slBefore) > pts * 0.5)
+               DBG(StringFormat("    BE: SL moved %.5f → %.5f (BE triggered ✓)", slBefore, slAfter));
+            else
+               DBG(StringFormat("    BE: not triggered yet (need %.1f ATR profit, have %.5f move)",
+                                  beATRMult, MathAbs(curPrice - openPrice)));
+         }
+      }
 
-      // Partial close at TP1 (once per position)
+      // ---- Partial close at TP1 (once per position) ----
       bool tp1Done = (idx < ArraySize(tp1DoneMap)) ? tp1DoneMap[idx] : false;
       if(!tp1Done)
       {
-         bool nearTP1 = false;
-         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-            nearTP1 = (curPrice >= openPrice + tp1ATRMult * atr * 1.4);
-         else
-            nearTP1 = (curPrice <= openPrice - tp1ATRMult * atr * 1.4);
+         double tp1Threshold = openPrice + (isBuy ? 1.0 : -1.0) * tp1ATRMult * atr * 1.4;
+         bool   nearTP1      = isBuy ? (curPrice >= tp1Threshold)
+                                     : (curPrice <= tp1Threshold);
+
+         if(g_debugMode)
+            DBG(StringFormat("    TP1: %s (need %.5f, cur %.5f)",
+                               nearTP1    ? "TRIGGERED → partial close 50% ✓"
+                                          : "not yet reached",
+                               tp1Threshold, curPrice));
 
          if(nearTP1)
          {
@@ -288,9 +394,27 @@ void ManagePositions(CTrade &trade, CPositionInfo &pos,
             if(idx < ArraySize(tp1DoneMap)) tp1DoneMap[idx] = true;
          }
       }
+      else
+      {
+         if(g_debugMode) DBG("    TP1: already done — running on trail");
+      }
 
-      // Trail stop for the runner
+      // ---- Trail stop for the runner ----
+      double slBeforeTrail = PositionSelectByTicket(ticket)
+                             ? PositionGetDouble(POSITION_SL) : curSL;
       TrailStop(trade, pos, ticket, trailATRMult, symbol, tf);
+      if(g_debugMode && PositionSelectByTicket(ticket))
+      {
+         double slAfterTrail = PositionGetDouble(POSITION_SL);
+         if(MathAbs(slAfterTrail - slBeforeTrail) > pts * 0.5)
+            DBG(StringFormat("    Trail: SL moved %.5f → %.5f ✓", slBeforeTrail, slAfterTrail));
+         else
+            DBG(StringFormat("    Trail: no move (need price %.1f ATR away from SL)",
+                               trailATRMult));
+      }
+
       idx++;
    }
+   if(g_debugMode && idx == 0)
+      DBG("  No managed positions found for this symbol/magic");
 }
