@@ -3,7 +3,8 @@
 //|  Defines the NY session opening range (first N minutes) and       |
 //|  detects confirmed breakouts with order flow validation.          |
 //+------------------------------------------------------------------+
-#pragma once
+#ifndef ORB_MQH
+#define ORB_MQH
 
 //--------------------------------------------------------------------
 //  Opening Range Structure
@@ -228,3 +229,5 @@ void ORBProfitTargets(const OpeningRange &orb, int direction,
       tp2 = orb.low - rng * 2.0;
    }
 }
+
+#endif // ORB_MQH

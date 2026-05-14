@@ -3,7 +3,8 @@
 //|  Approximates delta, CVD, absorption, initiative, exhaustion      |
 //|  using tick volume (forex proxy for real volume).                 |
 //+------------------------------------------------------------------+
-#pragma once
+#ifndef ORDERFLOW_MQH
+#define ORDERFLOW_MQH
 
 //--- Constants
 #define OF_BARS_LOOKBACK       100    // Bars used for averages
@@ -262,3 +263,5 @@ int GetOrderFlowScore(string symbol, ENUM_TIMEFRAMES tf)
 
    return MathMax(-3, MathMin(3, score));
 }
+
+#endif // ORDERFLOW_MQH

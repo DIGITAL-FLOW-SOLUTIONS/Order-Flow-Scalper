@@ -2,7 +2,8 @@
 //|  VolumeProfile.mqh  —  Session Volume Profile Module             |
 //|  Calculates VAH, VAL, POC and LVNs from intraday tick volume.    |
 //+------------------------------------------------------------------+
-#pragma once
+#ifndef VOLUMEPROFILE_MQH
+#define VOLUMEPROFILE_MQH
 
 #define VP_BINS        200     // Price bins for profile
 #define VP_VALUE_PCT   0.70    // Value area covers 70% of session volume
@@ -237,3 +238,5 @@ int FindSessionStartBar(string symbol, ENUM_TIMEFRAMES tf, int sessionGMTHour)
    }
    return -1;
 }
+
+#endif // VOLUMEPROFILE_MQH

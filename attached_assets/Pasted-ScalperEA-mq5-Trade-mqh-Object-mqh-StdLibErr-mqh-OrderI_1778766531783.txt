@@ -1,0 +1,120 @@
+ScalperEA.mq5			
+Trade.mqh			
+Object.mqh			
+StdLibErr.mqh			
+OrderInfo.mqh			
+HistoryOrderInfo.mqh			
+PositionInfo.mqh			
+DealInfo.mqh			
+OrderFlow.mqh			
+'#pragma' - invalid preprocessor command	OrderFlow.mqh	6	1
+VolumeProfile.mqh			
+'#pragma' - invalid preprocessor command	VolumeProfile.mqh	5	1
+ORB.mqh			
+'#pragma' - invalid preprocessor command	ORB.mqh	6	1
+RiskManager.mqh			
+'#pragma' - invalid preprocessor command	RiskManager.mqh	5	1
+TradeManager.mqh			
+'#pragma' - invalid preprocessor command	TradeManager.mqh	6	1
+'#pragma' - expressions are not allowed on a global scope	OrderFlow.mqh	6	1
+'#pragma' - expressions are not allowed on a global scope	VolumeProfile.mqh	5	1
+declaration without type	VolumeProfile.mqh	33	23
+'&' - comma expected	VolumeProfile.mqh	33	37
+declaration without type	VolumeProfile.mqh	43	26
+'&' - comma expected	VolumeProfile.mqh	43	40
+declaration without type	VolumeProfile.mqh	53	25
+'&' - comma expected	VolumeProfile.mqh	53	39
+declaration without type	VolumeProfile.mqh	172	25
+'&' - comma expected	VolumeProfile.mqh	172	39
+declaration without type	VolumeProfile.mqh	192	28
+'&' - comma expected	VolumeProfile.mqh	192	42
+declaration without type	VolumeProfile.mqh	205	29
+'&' - comma expected	VolumeProfile.mqh	205	43
+'#pragma' - expressions are not allowed on a global scope	ORB.mqh	6	1
+declaration without type	ORB.mqh	29	24
+'&' - comma expected	ORB.mqh	29	37
+declaration without type	ORB.mqh	51	25
+'&' - comma expected	ORB.mqh	51	38
+declaration without type	ORB.mqh	143	22
+'&' - comma expected	ORB.mqh	143	35
+declaration without type	ORB.mqh	182	33
+'&' - comma expected	ORB.mqh	182	46
+declaration without type	ORB.mqh	204	35
+'&' - comma expected	ORB.mqh	204	48
+declaration without type	ORB.mqh	216	29
+'&' - comma expected	ORB.mqh	216	42
+'#pragma' - expressions are not allowed on a global scope	RiskManager.mqh	5	1
+'#pragma' - expressions are not allowed on a global scope	TradeManager.mqh	6	1
+declaration without type	TradeManager.mqh	38	18
+'&' - comma expected	TradeManager.mqh	38	32
+'EntrySignal' - unexpected token, probably type is missing?	TradeManager.mqh	61	1
+'EvaluateEntry' - semicolon expected	TradeManager.mqh	61	13
+'ENUM_TIMEFRAMES' - unexpected token, probably type is missing?	TradeManager.mqh	61	42
+'tf' - semicolon expected	TradeManager.mqh	61	58
+'VolumeProfile' - unexpected token, probably type is missing?	TradeManager.mqh	62	33
+'&' - semicolon expected	TradeManager.mqh	62	47
+'OpeningRange' - unexpected token, probably type is missing?	TradeManager.mqh	62	58
+'&' - semicolon expected	TradeManager.mqh	62	71
+'double' - unexpected token, probably type is missing?	TradeManager.mqh	63	27
+'double' - unexpected token, probably type is missing?	TradeManager.mqh	63	43
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	66	4
+'.' - semicolon expected	TradeManager.mqh	66	7
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	67	4
+'.' - semicolon expected	TradeManager.mqh	67	7
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	68	4
+'.' - semicolon expected	TradeManager.mqh	68	7
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	69	4
+'.' - semicolon expected	TradeManager.mqh	69	7
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	70	4
+'.' - semicolon expected	TradeManager.mqh	70	7
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	71	4
+'.' - semicolon expected	TradeManager.mqh	71	7
+'sig' - unexpected token, probably type is missing?	TradeManager.mqh	72	4
+'.' - semicolon expected	TradeManager.mqh	72	7
+undeclared identifier 'CalcATR'	TradeManager.mqh	74	19
+undeclared identifier 'symbol'	TradeManager.mqh	74	27
+',' - unexpected token	TradeManager.mqh	74	33
+'symbol' - some operator expected	TradeManager.mqh	74	27
+semicolon expected	TradeManager.mqh	74	35
+'tf' - unexpected token, probably type is missing?	TradeManager.mqh	74	35
+')' - semicolon expected	TradeManager.mqh	74	37
+undeclared identifier 'symbol'	TradeManager.mqh	75	26
+undeclared identifier 'tf'	TradeManager.mqh	75	34
+cannot convert enum	TradeManager.mqh	75	34
+   built-in: double iClose(const string,ENUM_TIMEFRAMES,int)	TradeManager.mqh	75	19
+undeclared identifier 'symbol'	TradeManager.mqh	76	36
+implicit conversion from 'number' to 'string'	TradeManager.mqh	76	36
+undeclared identifier 'symbol'	TradeManager.mqh	77	42
+implicit conversion from 'number' to 'string'	TradeManager.mqh	77	42
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	79	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	81	4
+undeclared identifier 'symbol'	TradeManager.mqh	90	36
+undeclared identifier 'tf'	TradeManager.mqh	90	44
+cannot convert enum	TradeManager.mqh	90	44
+   int GetOrderFlowScore(string,ENUM_TIMEFRAMES)	OrderFlow.mqh	234	5
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	91	4
+undeclared identifier 'vp'	TradeManager.mqh	98	24
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	99	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	111	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	118	4
+undeclared identifier 'symbol'	TradeManager.mqh	130	38
+undeclared identifier 'tf'	TradeManager.mqh	130	46
+cannot convert enum	TradeManager.mqh	130	46
+   bool IsAbsorption(string,ENUM_TIMEFRAMES,int,int&)	OrderFlow.mqh	79	6
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	131	4
+undeclared identifier 'symbol'	TradeManager.mqh	138	34
+undeclared identifier 'tf'	TradeManager.mqh	138	42
+cannot convert enum	TradeManager.mqh	138	42
+   int IsExhaustion(string,ENUM_TIMEFRAMES,int)	OrderFlow.mqh	150	5
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	139	4
+undeclared identifier 'symbol'	TradeManager.mqh	149	46
+undeclared identifier 'tf'	TradeManager.mqh	149	54
+cannot convert enum	TradeManager.mqh	149	54
+   int CalcDeltaDivergence(string,ENUM_TIMEFRAMES,int)	OrderFlow.mqh	205	5
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	150	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	163	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	164	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	166	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	167	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	169	4
+'if' - expressions are not allowed on a global scope	TradeManager.mqh	170	4

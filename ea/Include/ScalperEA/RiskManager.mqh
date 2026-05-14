@@ -2,7 +2,8 @@
 //|  RiskManager.mqh  —  Risk & Position Sizing Module               |
 //|  Handles lot sizing, trailing stops, break-even, partial close.  |
 //+------------------------------------------------------------------+
-#pragma once
+#ifndef RISKMANAGER_MQH
+#define RISKMANAGER_MQH
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 
@@ -246,3 +247,5 @@ void CloseAllPositions(CTrade &trade, string symbol, ulong magic)
       }
    }
 }
+
+#endif // RISKMANAGER_MQH

@@ -3,7 +3,8 @@
 //|  Combines order flow, volume profile and ORB signals into        |
 //|  structured entry/exit decisions.                                 |
 //+------------------------------------------------------------------+
-#pragma once
+#ifndef TRADEMANAGER_MQH
+#define TRADEMANAGER_MQH
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 #include "OrderFlow.mqh"
@@ -418,3 +419,5 @@ void ManagePositions(CTrade &trade, CPositionInfo &pos,
    if(g_debugMode && idx == 0)
       DBG("  No managed positions found for this symbol/magic");
 }
+
+#endif // TRADEMANAGER_MQH
