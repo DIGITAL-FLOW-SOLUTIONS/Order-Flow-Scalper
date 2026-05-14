@@ -146,26 +146,31 @@ bool PartialClose(CTrade &trade, CPositionInfo &pos,
 
 //--------------------------------------------------------------------
 //  Check if daily drawdown limit has been hit
-//  Returns true if we should stop trading for the day
+//  dayOpenBalance: account balance at session start (recorded once per day)
+//  Falls back to live balance if dayOpenBalance is 0.
+//  This mirrors prop firm rules: drawdown measured from day-open equity.
 //--------------------------------------------------------------------
-bool DailyDrawdownBreached(double maxDailyDrawdownPct)
+bool DailyDrawdownBreached(double maxDailyDrawdownPct, double dayOpenBalance = 0)
 {
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(balance <= 0) return false;
-   double ddPct = (balance - equity) / balance;
+   double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+   double refBal   = (dayOpenBalance > 0) ? dayOpenBalance
+                                          : AccountInfoDouble(ACCOUNT_BALANCE);
+   if(refBal <= 0) return false;
+   double ddPct = (refBal - equity) / refBal;
    return (ddPct >= maxDailyDrawdownPct);
 }
 
 //--------------------------------------------------------------------
 //  Check daily profit target — stop trading once hit
+//  dayOpenBalance: account balance at session start
 //--------------------------------------------------------------------
-bool DailyProfitTargetHit(double targetPct)
+bool DailyProfitTargetHit(double targetPct, double dayOpenBalance = 0)
 {
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(balance <= 0) return false;
-   double profitPct = (equity - balance) / balance;
+   double refBal  = (dayOpenBalance > 0) ? dayOpenBalance
+                                         : AccountInfoDouble(ACCOUNT_BALANCE);
+   if(refBal <= 0) return false;
+   double profitPct = (equity - refBal) / refBal;
    return (profitPct >= targetPct);
 }
 

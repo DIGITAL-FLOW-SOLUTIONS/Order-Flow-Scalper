@@ -92,6 +92,8 @@ int            g_cooldown    = 0;  // Bars remaining in cooldown
 bool           g_tp1Done[];        // Per-position TP1 partial close flag
 
 bool           g_tradingAllowed = true;  // Daily risk gate
+double         g_dayOpenBalance = 0;      // Balance recorded at session open (for intraday DD)
+int            g_lastDayOfWeek  = -1;     // Track day boundary for DD reset
 
 //====================================================================
 //  HELPER: minutes → ENUM_TIMEFRAMES
@@ -230,7 +232,7 @@ void OnTick()
    if(!IsNewBar(symbol, g_ofTF)) return;
 
    // ---- Daily risk checks ----
-   if(DailyDrawdownBreached(InpMaxDailyDD))
+   if(DailyDrawdownBreached(InpMaxDailyDD, g_dayOpenBalance))
    {
       if(g_tradingAllowed)
       {
@@ -240,7 +242,7 @@ void OnTick()
       }
       return;
    }
-   if(DailyProfitTargetHit(InpDailyProfitStop))
+   if(DailyProfitTargetHit(InpDailyProfitStop, g_dayOpenBalance))
    {
       if(g_tradingAllowed)
       {
@@ -258,9 +260,27 @@ void OnTick()
    // ---- Spread filter ----
    if(!SpreadOK(symbol)) return;
 
+   // ---- Track day open balance for accurate intraday drawdown ----
+   {
+      MqlDateTime dt;
+      TimeToStruct(TimeCurrent(), dt);
+      if(dt.day_of_week != g_lastDayOfWeek)
+      {
+         g_dayOpenBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+         g_lastDayOfWeek  = dt.day_of_week;
+         g_tradingAllowed = true;   // Reset daily gate each new day
+         ResetOpeningRange(g_orb);  // New day — fresh ORB
+      }
+   }
+
    // ---- Update ORB ----
    if(InpORBEnabled)
+   {
       UpdateOpeningRange(g_orb, symbol, g_ofTF, InpNYOpenHour, InpORBMinutes);
+      // CRITICAL: check for breakout on every bar after ORB is formed
+      if(g_orb.isFormed)
+         CheckORBBreakout(g_orb, symbol, g_ofTF);
+   }
 
    // ---- Rebuild volume profile (once per bar on VP timeframe) ----
    RebuildVolumeProfile(symbol);

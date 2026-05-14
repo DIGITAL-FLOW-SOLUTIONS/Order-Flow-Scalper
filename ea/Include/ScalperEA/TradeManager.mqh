@@ -72,7 +72,7 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
    sig.reason     = "";
 
    double atr   = CalcATR(symbol, tf);
-   double price = iClose(symbol, tf, 0);
+   double price = iClose(symbol, tf, 1);   // bar 1 = last CLOSED bar, avoids look-ahead bias
    double pts   = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int    digits= (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
 
