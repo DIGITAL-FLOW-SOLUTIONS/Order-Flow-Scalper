@@ -35,6 +35,7 @@ Tracks the first 30 minutes of the NY session (configurable):
 
 ### Risk Management
 - ATR-based position sizing (% of account balance at risk per trade)
+- **Small account safe** — when the risk-correct lot is below the broker minimum (0.01), the EA forces the minimum lot and places the trade anyway instead of skipping it. A journal warning is printed showing the actual risk % so you always know
 - Break-even stop triggered after price moves `BEATRMult × ATR` in favour
 - ATR trailing stop for the runner after partial close
 - 50% partial close at TP1

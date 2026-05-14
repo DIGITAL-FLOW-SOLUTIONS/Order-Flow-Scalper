@@ -1,0 +1,14 @@
+What the Notes Mention That Is Not Implemented (Honest Gaps)
+These are real concepts from the notes that are absent from the EA, with reasons:
+
+Concept	Why Not Implemented
+Fair Value Gap (FVG) by volume — file 9 describes the true FVG as the lowest-volume zone inside a candle range, not a price gap	Requires footprint/tick-level data. MT5 forex only provides tick volume per bar, not per price level inside a bar. LVN detection is the closest proxy.
+"Big Trades" indicator — detecting single large aggressive orders	Requires real-time tick data streaming and order book access. Not available from standard MT5 OHLCV + tick volume.
+Iceberg orders — hidden repeated liquidity	Cannot be detected from OHLCV data. Requires Level 2 order book data.
+Previous session VP levels carrying forward — notes mention that yesterday's POC/VAH/VAL matter as "reload zones" today	Currently only the current session's profile is built. Previous session levels are not stored.
+Regime detection — classifying the day as trending, choppy, or ranging before committing to a model	Not implemented. This would require an additional filter layer.
+The first three gaps are not solvable in standard MT5 forex — they require exchange-level order book access which brokers don't provide for spot forex. The last two are solvable additions if you want to expand the EA later.
+
+
+Backtesting
+Start with EURUSD — most tick data available from brokers and most stable spread behaviour. After that test GBPUSD, then XAUUSD (which will have more volatile results due to wider spreads and ATR). Compare the equity curves across all 5 pairs and optimise InpMinConfluence and InpSLATRMult per pair if needed.

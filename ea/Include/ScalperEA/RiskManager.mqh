@@ -46,9 +46,27 @@ double CalcLotSize(string symbol, double riskPct, double slPoints)
 
    double lots = riskMoney / moneyPerLot;
 
-   // Normalise to broker constraints
+   // Normalise to broker lot step (floor to avoid oversizing)
    lots = MathFloor(lots / lotStep) * lotStep;
-   lots = MathMax(lotMin, MathMin(lotMax, lots));
+
+   // ---------------------------------------------------------------
+   //  Minimum-lot override for small accounts (e.g. $20–$100)
+   //  When the risk-correct lot falls below the broker minimum (0.01),
+   //  we force the minimum lot and place the trade anyway.
+   //  This means the ACTUAL risk % will be higher than InpRiskPct —
+   //  a deliberate trade-off so the order is never rejected.
+   //  The journal warning below makes this visible every single time.
+   // ---------------------------------------------------------------
+   if(lots < lotMin)
+   {
+      double actualRiskPct = (moneyPerLot * lotMin) / balance * 100.0;
+      PrintFormat("ScalperEA [%s] SMALL ACCOUNT: calculated %.4f lots < broker min %.4f. "
+                  "Forcing min lot. Actual risk this trade = %.1f%% (target was %.1f%%)",
+                  symbol, lots, lotMin, actualRiskPct, riskPct * 100.0);
+      lots = lotMin;
+   }
+
+   lots = MathMin(lotMax, lots);
    return NormalizeDouble(lots, 2);
 }
 
