@@ -20,6 +20,7 @@
 
 //--------------------------------------------------------------------
 //  Entry signal structure
+//  (also carries signal conditions for the Adaptive Journal)
 //--------------------------------------------------------------------
 struct EntrySignal
 {
@@ -30,6 +31,16 @@ struct EntrySignal
    double   tp2;             // Second take profit
    int      confluence;      // Number of confirming conditions
    string   reason;          // Human-readable log reason
+   // Signal conditions captured for Adaptive Journal + Guardian
+   int      ofScore;         // Raw order flow score
+   int      vpBias;          // Volume profile bias vote
+   int      orbSig;          // ORB signal vote
+   bool     absorption;      // Absorption detected on signal bar
+   int      exhaustion;      // Exhaustion level
+   int      deltaDiv;        // Delta divergence
+   double   atr;             // ATR at time of signal
+   double   slDist;          // SL distance in price (for Guardian spawn)
+   double   tp1Dist;         // TP1 distance in price (for Guardian spawn)
 };
 
 //--------------------------------------------------------------------
@@ -71,6 +82,15 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
    sig.tp2        = 0;
    sig.confluence = 0;
    sig.reason     = "";
+   sig.ofScore    = 0;
+   sig.vpBias     = 0;
+   sig.orbSig     = 0;
+   sig.absorption = false;
+   sig.exhaustion = 0;
+   sig.deltaDiv   = 0;
+   sig.atr        = 0;
+   sig.slDist     = 0;
+   sig.tp1Dist    = 0;
 
    double atr   = CalcATR(symbol, tf);
    double price = iClose(symbol, tf, 1);   // bar 1 = last CLOSED bar, avoids look-ahead bias
@@ -267,6 +287,17 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
                         confluence,
                         sig.entryPrice, sig.stopLoss, slDist, slSource,
                         sig.tp1, sig.tp2, sig.reason));
+
+   // ---- Populate signal snapshot fields for Adaptive Journal & Guardian ----
+   sig.ofScore    = ofScore;
+   sig.vpBias     = vpBias;
+   sig.orbSig     = orbSignal;
+   sig.absorption = hasAbsorption;
+   sig.exhaustion = exhaustion;
+   sig.deltaDiv   = deltaDivergence;
+   sig.atr        = atr;
+   sig.slDist     = slDist;
+   sig.tp1Dist    = MathAbs(sig.tp1 - sig.entryPrice);
 
    return sig;
 }

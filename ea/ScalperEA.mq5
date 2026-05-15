@@ -26,6 +26,9 @@
 #include "Include/ScalperEA/ORB.mqh"
 #include "Include/ScalperEA/RiskManager.mqh"
 #include "Include/ScalperEA/TradeManager.mqh"
+#include "Include/ScalperEA/AdaptiveJournal.mqh"
+#include "Include/ScalperEA/Guardian.mqh"
+#include "Include/ScalperEA/LiveTradeManager.mqh"
 
 //====================================================================
 //  INPUT PARAMETERS
@@ -74,6 +77,40 @@ input int      InpCooldownBarsCnt = 3;           // Cooldown bars after entry
 input group "=== Pair-Specific Spread Limits (pips) ==="
 input double   InpSpreadXAUUSD    = 8.0;         // XAUUSD max spread override
 input double   InpSpreadUSDJPY    = 2.0;         // USDJPY max spread override
+
+// === REVERSER ===
+// Flips the trade direction while preserving identical SL/TP distances (same R:R).
+// Manual override (InpReverser=true) always reverses.
+// Auto-reverse lets Guardian decide based on live phantom trade results.
+input group "=== REVERSER ==="
+input bool     InpReverser        = false;        // Always reverse signals (manual)
+input bool     InpAutoReverse     = true;         // Auto-reverse when Guardian recommends it
+
+// === Adaptive Journal ===
+// Records every trade to CSV with full signal conditions, MAE, MFE.
+input group "=== Adaptive Journal ==="
+input bool     InpAdaptiveEnabled = true;         // Enable trade journal (CSV)
+input string   InpJournalFile     = "ScalperEA_Journal.csv"; // Journal filename
+
+// === Guardian — Phantom Trade Layer ===
+// Spawns imaginary NORMAL + REVERSED trade pairs on each signal.
+// Monitors which side hits TP vs SL to determine real-time edge.
+// Gates real trading when market shows no edge; advises direction.
+input group "=== Guardian ==="
+input bool     InpGuardianEnabled = true;         // Enable Guardian phantom system
+input int      InpGRD_Window      = 20;           // Rolling window (phantom pairs)
+input int      InpGRD_MinSample   = 5;            // Min pairs before gating real trades
+input double   InpGRD_EdgeThresh  = 0.10;         // Win-rate gap to prefer one side (0.10=10%)
+input string   InpGRD_File        = "ScalperEA_Guardian.csv"; // Guardian log filename
+
+// === Live Trade Manager ===
+// Re-evaluates open trades each bar using live signal stack.
+// Closes intelligently when profit is at risk; never closes at a loss.
+input group "=== Live Trade Manager ==="
+input bool     InpLTMEnabled      = true;         // Enable intelligent exit management
+input double   InpLTM_MFEThresh   = 0.50;        // MFE % of TP1 to activate monitoring (0.50=50%)
+input double   InpLTM_RetracePct  = 0.80;        // Close if price retraces this fraction of MFE
+input int      InpLTM_FlipConf    = 2;           // Min confluence required for signal-flip close
 
 //====================================================================
 //  GLOBAL STATE
@@ -236,10 +273,24 @@ int OnInit()
    g_cooldown       = 0;
    g_tradingAllowed = true;
 
-   Print("ScalperEA v1.00 initialised on ", Symbol(),
+   // ---- Initialise advanced modules ----
+   if(InpAdaptiveEnabled)
+      AJ_Init(InpJournalFile);
+
+   if(InpGuardianEnabled)
+      GRD_Init(InpGRD_MinSample, InpGRD_EdgeThresh, InpGRD_File);
+
+   if(InpLTMEnabled)
+      LTM_Init(InpLTM_MFEThresh, InpLTM_RetracePct, InpLTM_FlipConf);
+
+   Print("ScalperEA v2.00 initialised on ", Symbol(),
          " | OF TF: ", EnumToString(g_ofTF),
          " | VP TF: ", EnumToString(g_vpTF),
-         " | Debug: ", g_debugMode ? "ON" : "OFF");
+         " | Debug: ", g_debugMode ? "ON" : "OFF",
+         " | Reverser: ", InpReverser ? "MANUAL" : (InpAutoReverse ? "AUTO" : "OFF"),
+         " | Guardian: ", InpGuardianEnabled ? "ON" : "OFF",
+         " | LTM: ", InpLTMEnabled ? "ON" : "OFF",
+         " | Journal: ", InpAdaptiveEnabled ? "ON" : "OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -258,7 +309,11 @@ void OnTick()
 {
    string symbol = Symbol();
 
-   // Only process logic on a new bar (bar-close confirmed signals)
+   // ---- Guardian: 24/7 tick-level phantom monitoring (runs before bar gate) ----
+   if(InpGuardianEnabled)
+      GRD_UpdateOnTick(symbol);
+
+   // Only process full logic on a new bar (bar-close confirmed signals)
    if(!IsNewBar(symbol, g_ofTF)) return;
 
    // ---- Debug: new bar header ----
@@ -270,6 +325,13 @@ void OnTick()
       DBG(StringFormat("========== NEW BAR [%s] %s ==========",
                         symbol, TimeToString(iTime(symbol, g_ofTF, 0), TIME_DATE|TIME_MINUTES)));
       DBG(StringFormat("Bid=%.5f  Ask=%.5f  Spread=%.2f pips", bid, ask, spreadPips));
+   }
+
+   // ---- Adaptive Journal: update MAE/MFE for open trades + detect closures ----
+   if(InpAdaptiveEnabled)
+   {
+      AJ_UpdateActive(symbol);
+      AJ_CheckClosedTrades(symbol);
    }
 
    // ---- Daily risk checks ----
@@ -343,10 +405,9 @@ void OnTick()
       {
          g_dayOpenBalance = AccountInfoDouble(ACCOUNT_BALANCE);
          g_lastDayOfWeek  = dt.day_of_week;
-         g_tradingAllowed = true;   // Reset daily gate each new day
-         ResetOpeningRange(g_orb);  // New day — fresh ORB
-         DBG(StringFormat("NEW TRADING DAY detected — DayOpenBalance recorded = %.2f, ORB reset",
-                           g_dayOpenBalance));
+         g_tradingAllowed = true;
+         ResetOpeningRange(g_orb);
+         DBG(StringFormat("NEW TRADING DAY — DayOpenBalance=%.2f, ORB reset", g_dayOpenBalance));
       }
    }
 
@@ -360,16 +421,16 @@ void OnTick()
    if(g_debugMode)
    {
       if(InpORBEnabled)
-         DBG(StringFormat("ORB: %s | Hi=%.5f Lo=%.5f Mid=%.5f | BreakoutUp=%s BreakoutDown=%s",
-                           g_orb.isFormed ? "FORMED ✓" : "NOT YET FORMED (waiting)",
-                           g_orb.high, g_orb.low, (g_orb.high + g_orb.low) / 2.0,
+         DBG(StringFormat("ORB: %s | Hi=%.5f Lo=%.5f | BreakoutUp=%s BreakoutDown=%s",
+                           g_orb.isFormed ? "FORMED ✓" : "NOT YET FORMED",
+                           g_orb.high, g_orb.low,
                            g_orb.breakoutUp   ? "YES" : "no",
                            g_orb.breakoutDown ? "YES" : "no"));
       else
          DBG("ORB: DISABLED");
    }
 
-   // ---- Rebuild volume profile (once per bar on VP timeframe) ----
+   // ---- Rebuild volume profile ----
    RebuildVolumeProfile(symbol);
    if(g_debugMode)
    {
@@ -377,12 +438,10 @@ void OnTick()
       {
          double pr    = iClose(symbol, g_ofTF, 1);
          string vaLoc = (pr >= g_vp.val && pr <= g_vp.vah) ? "INSIDE value area" :
-                        (pr  > g_vp.vah)                   ? "ABOVE value area (imbalance up)" :
-                                                             "BELOW value area (imbalance dn)";
-         DBG(StringFormat("VP: VALID ✓ | POC=%.5f  VAH=%.5f  VAL=%.5f | Price(bar1)=%.5f — %s",
+                        (pr  > g_vp.vah)                   ? "ABOVE value area" :
+                                                             "BELOW value area";
+         DBG(StringFormat("VP: VALID | POC=%.5f  VAH=%.5f  VAL=%.5f | Price=%.5f — %s",
                            g_vp.poc, g_vp.vah, g_vp.val, pr, vaLoc));
-         DBG(StringFormat("VP: LVN count=%d | Total session volume=%.0f",
-                           g_vp.lvnCount, g_vp.totalVolume));
       }
       else
          DBG(InpVPEnabled ? "VP: INVALID (not enough bars yet)" : "VP: DISABLED");
@@ -401,12 +460,19 @@ void OnTick()
       DBG("--- Managing open positions (BE / trail / partial close) ---");
       ManagePositions(g_trade, g_pos, symbol, InpMagic, g_ofTF,
                       InpBEATRMult, InpTrailATRMult, InpTP1ATRMult, g_tp1Done);
+
+      // Live Trade Manager: intelligent exit — runs alongside BE/trail
+      if(InpLTMEnabled)
+      {
+         LTM_SyncClosed(symbol);
+         LTM_ManagePositions(symbol, g_ofTF, g_vp, g_trade);
+      }
    }
 
    // ---- Cooldown check ----
    if(InpCooldownBars && g_cooldown > 0)
    {
-      DBG(StringFormat("Cooldown active — %d bars remaining → skipping entry this bar", g_cooldown));
+      DBG(StringFormat("Cooldown active — %d bars remaining → skipping entry", g_cooldown));
       g_cooldown--;
       return;
    }
@@ -418,35 +484,37 @@ void OnTick()
       return;
    }
 
+   // ---- Guardian: gate trading if phantom data shows no edge ----
+   if(InpGuardianEnabled && !GRD_CanTrade())
+   {
+      Print(StringFormat("Guardian: trading PAUSED | NormWR=%.0f%% RevWR=%.0f%% [%d samples] — waiting for edge",
+                          GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount()));
+      return;
+   }
+   if(InpGuardianEnabled && g_debugMode)
+      DBG(StringFormat("Guardian: NormWR=%.0f%% RevWR=%.0f%% [%d samples] | AutoRev=%s",
+                        GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount(),
+                        GRD_PreferReversed() ? "YES" : "NO"));
+
    // ---- Evaluate all strategy layers ----
    DBG("--- EvaluateEntry ---");
    EntrySignal sig = EvaluateEntry(symbol, g_ofTF, g_vp, g_orb,
                                    InpRiskPct, InpSLATRMult);
 
    // Apply direction filters
-   if(sig.direction > 0 && !InpAllowLong)
-   {
-      DBG("Long blocked by InpAllowLong=false");
-      sig.direction = 0;
-   }
-   if(sig.direction < 0 && !InpAllowShort)
-   {
-      DBG("Short blocked by InpAllowShort=false");
-      sig.direction = 0;
-   }
+   if(sig.direction > 0 && !InpAllowLong)  { DBG("Long blocked by InpAllowLong=false");  sig.direction = 0; }
+   if(sig.direction < 0 && !InpAllowShort) { DBG("Short blocked by InpAllowShort=false"); sig.direction = 0; }
 
    // Confluence gate
    if(sig.direction != 0 && sig.confluence < InpMinConfluence)
    {
-      DBG(StringFormat("Confluence %d < minimum %d → no trade this bar",
-                        sig.confluence, InpMinConfluence));
+      DBG(StringFormat("Confluence %d < minimum %d → no trade", sig.confluence, InpMinConfluence));
       sig.direction = 0;
    }
 
    if(sig.direction == 0)
    {
-      DBG(StringFormat("No valid signal | Reason: [%s]",
-                        sig.reason != "" ? sig.reason : "none"));
+      DBG(StringFormat("No valid signal | [%s]", sig.reason != "" ? sig.reason : "none"));
       return;
    }
 
@@ -455,6 +523,42 @@ void OnTick()
    {
       DBG("ORB not yet formed — waiting before entry");
       return;
+   }
+
+   // ---- REVERSER: flip signal while preserving identical R:R ratios ----
+   // origDir is the natural signal direction — saved BEFORE any flip.
+   // Guardian phantom spawning always uses origDir so its data is unbiased.
+   int  origDir       = sig.direction;
+   bool applyReverser = InpReverser ||
+                        (InpAutoReverse && InpGuardianEnabled && GRD_PreferReversed());
+
+   if(applyReverser)
+   {
+      int    digits  = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      double tp2Dist = MathAbs(sig.tp2 - sig.entryPrice); // preserve TP2 distance
+
+      sig.direction *= -1;  // flip
+
+      if(sig.direction > 0)   // flipped to LONG
+      {
+         sig.entryPrice = NormalizeDouble(SymbolInfoDouble(symbol, SYMBOL_ASK), digits);
+         sig.stopLoss   = NormalizeDouble(sig.entryPrice - sig.slDist,  digits);
+         sig.tp1        = NormalizeDouble(sig.entryPrice + sig.tp1Dist, digits);
+         sig.tp2        = NormalizeDouble(sig.entryPrice + tp2Dist,     digits);
+      }
+      else                    // flipped to SHORT
+      {
+         sig.entryPrice = NormalizeDouble(SymbolInfoDouble(symbol, SYMBOL_BID), digits);
+         sig.stopLoss   = NormalizeDouble(sig.entryPrice + sig.slDist,  digits);
+         sig.tp1        = NormalizeDouble(sig.entryPrice - sig.tp1Dist, digits);
+         sig.tp2        = NormalizeDouble(sig.entryPrice - tp2Dist,     digits);
+      }
+      sig.reason += "REVERSED ";
+      Print(StringFormat("REVERSER: %s → %s | SL_dist=%.5f TP1_dist=%.5f [%s]",
+                          origDir > 0 ? "LONG" : "SHORT",
+                          sig.direction > 0 ? "LONG" : "SHORT",
+                          sig.slDist, sig.tp1Dist,
+                          InpReverser ? "manual" : "Guardian-auto"));
    }
 
    // ---- Signal confirmed — log and place trade ----
@@ -471,6 +575,53 @@ void OnTick()
       g_cooldown = InpCooldownBarsCnt;
       ArrayInitialize(g_tp1Done, false);
       DBG(StringFormat("Cooldown set to %d bars after entry", InpCooldownBarsCnt));
+
+      // Find the position ticket for the newly placed trade
+      ulong posTicket = 0;
+      for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
+      {
+         if(PositionGetSymbol(pi) == symbol &&
+            PositionGetInteger(POSITION_MAGIC) == (long)InpMagic)
+         {
+            posTicket = PositionGetTicket(pi);
+            break;
+         }
+      }
+
+      if(posTicket > 0)
+      {
+         // Spawn Guardian phantom pair using ORIGINAL pre-reversal direction
+         // so phantom statistics remain unbiased regardless of REVERSER state
+         if(InpGuardianEnabled)
+            GRD_SpawnPhantoms(symbol, origDir, sig.entryPrice, sig.slDist, sig.tp1Dist);
+
+         // Register with Adaptive Journal
+         if(InpAdaptiveEnabled)
+         {
+            AJ_Snapshot snap;
+            snap.ofScore    = sig.ofScore;
+            snap.vpBias     = sig.vpBias;
+            snap.orbSig     = sig.orbSig;
+            snap.absorption = sig.absorption;
+            snap.exhaustion = sig.exhaustion;
+            snap.deltaDiv   = sig.deltaDiv;
+            snap.confluence = sig.confluence;
+            snap.atr        = sig.atr;
+            snap.spreadPips = GetSpreadPips(symbol);
+            MqlDateTime dtSnap;
+            TimeToStruct(TimeCurrent(), dtSnap);
+            snap.hourGMT = dtSnap.hour;
+            AJ_RegisterTrade(posTicket, symbol, sig.direction, applyReverser,
+                             sig.entryPrice, sig.stopLoss, sig.tp1, sig.tp2, snap);
+         }
+
+         // Register with Live Trade Manager
+         if(InpLTMEnabled)
+            LTM_RegisterTrade(posTicket, symbol, sig.direction,
+                              sig.entryPrice, sig.stopLoss, sig.tp1);
+      }
+      else
+         DBG("WARNING: could not find position ticket after placement — skipping module registration");
    }
    else
    {
