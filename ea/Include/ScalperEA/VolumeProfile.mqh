@@ -220,19 +220,24 @@ double NearestVPLevel(const VolumeProfile &vp, double price, int &levelType)
 //--------------------------------------------------------------------
 int FindSessionStartBar(string symbol, ENUM_TIMEFRAMES tf, int sessionGMTHour)
 {
+   // Convert broker bar timestamps to GMT before hour comparison so this
+   // function works correctly regardless of broker server timezone.
+   int gmtOffset = (int)(TimeCurrent() - TimeGMT());
    int bars = iBars(symbol, tf);
    MqlDateTime dt;
    for(int i = 0; i < bars; i++)
    {
-      datetime t = iTime(symbol, tf, i);
-      TimeToStruct(t, dt);
+      datetime t    = iTime(symbol, tf, i);
+      datetime tGMT = t - gmtOffset;
+      TimeToStruct(tGMT, dt);
       if(dt.hour == sessionGMTHour && dt.min == 0) return i;
       // Also catch bars that span the hour
       if(dt.hour < sessionGMTHour && i > 0)
       {
-         datetime tPrev = iTime(symbol, tf, i - 1);
+         datetime tPrev    = iTime(symbol, tf, i - 1);
+         datetime tPrevGMT = tPrev - gmtOffset;
          MqlDateTime dp;
-         TimeToStruct(tPrev, dp);
+         TimeToStruct(tPrevGMT, dp);
          if(dp.hour >= sessionGMTHour) return i - 1;
       }
    }

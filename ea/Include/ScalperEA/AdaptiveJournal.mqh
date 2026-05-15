@@ -130,7 +130,7 @@ void AJ_RegisterTrade(ulong ticket, string symbol, int direction,
    g_aj_trades[slot].symbol       = symbol;
    g_aj_trades[slot].direction    = direction;
    g_aj_trades[slot].wasReversed  = wasReversed;
-   g_aj_trades[slot].entryTime    = TimeCurrent();
+   g_aj_trades[slot].entryTime    = TimeGMT();
    g_aj_trades[slot].entryPrice   = entryPrice;
    g_aj_trades[slot].slPrice      = slPrice;
    g_aj_trades[slot].tp1Price     = tp1Price;
@@ -240,7 +240,7 @@ void AJ_CheckClosedTrades(string symbol)
       if(PositionSelectByTicket(g_aj_trades[i].ticket)) continue;  // still open
 
       // Position gone — find the closing deal in history
-      datetime exitTime  = TimeCurrent();
+      datetime exitTime  = TimeGMT();
       double   exitPrice = g_aj_trades[i].entryPrice;
       double   pl        = 0;
       string   reason    = "CLOSED";

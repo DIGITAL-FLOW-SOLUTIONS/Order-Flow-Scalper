@@ -151,7 +151,7 @@ void GRD_SpawnPhantoms(string symbol,
 
    g_grd_phantoms[slot].id           = g_grd_nextId++;
    g_grd_phantoms[slot].symbol       = symbol;
-   g_grd_phantoms[slot].openTime     = TimeCurrent();
+   g_grd_phantoms[slot].openTime     = TimeGMT();
    g_grd_phantoms[slot].active       = true;
    g_grd_phantoms[slot].pairComplete = false;
 
@@ -267,7 +267,7 @@ void GRD_RecordResult(GRD_Phantom &p)
       FileWrite(fh,
          (string)p.id, p.symbol,
          TimeToString(p.openTime, TIME_DATE|TIME_MINUTES),
-         TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+         TimeToString(TimeGMT(), TIME_DATE|TIME_MINUTES),
          p.normalDir > 0 ? "LONG" : "SHORT",
          DoubleToString(p.normalEntry, 5),
          DoubleToString(p.normalSL, 5),

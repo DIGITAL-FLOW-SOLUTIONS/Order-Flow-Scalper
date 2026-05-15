@@ -52,15 +52,22 @@ void ResetOpeningRange(OpeningRange &orb)
 bool UpdateOpeningRange(OpeningRange &orb, string symbol, ENUM_TIMEFRAMES tf,
                         int nyOpenHour = 13, int orbMinutes = 30)
 {
-   MqlDateTime dt;
-   datetime now = iTime(symbol, tf, 0);
-   TimeToStruct(now, dt);
+   // Broker-to-GMT offset in seconds.
+   // iTime() returns broker server time which varies per broker/country.
+   // Converting to GMT makes session detection broker-independent.
+   int gmtOffset = (int)(TimeCurrent() - TimeGMT());
 
-   // Check if we're in a new trading day (reset range)
+   MqlDateTime dt;
+   datetime now    = iTime(symbol, tf, 0);
+   datetime nowGMT = now - gmtOffset;
+   TimeToStruct(nowGMT, dt);
+
+   // Check if we're in a new trading day (compare in GMT)
    if(orb.isFormed)
    {
       MqlDateTime orbDay;
-      TimeToStruct(orb.startTime, orbDay);
+      datetime orbStartGMT = orb.startTime - gmtOffset;
+      TimeToStruct(orbStartGMT, orbDay);
       if(orbDay.day != dt.day || orbDay.mon != dt.mon)
          ResetOpeningRange(orb);
    }
@@ -75,21 +82,20 @@ bool UpdateOpeningRange(OpeningRange &orb, string symbol, ENUM_TIMEFRAMES tf,
    datetime sessionStart = 0;
    datetime sessionEnd   = 0;
 
-   // Scan back to find today's NY open bar
+   // Scan back to find today's NY open bar — compare hours in GMT
    for(int i = 1; i < MathMin(bars, 500); i++)
    {
-      datetime bt = iTime(symbol, tf, i);
+      datetime bt    = iTime(symbol, tf, i);
+      datetime btGMT = bt - gmtOffset;
       MqlDateTime bdt;
-      TimeToStruct(bt, bdt);
+      TimeToStruct(btGMT, bdt);
 
       if(bdt.hour == nyOpenHour && bdt.min < tfMins)
       {
-         // Check it's the same day as current bar
-         MqlDateTime cdt;
-         TimeToStruct(now, cdt);
-         if(bdt.day == cdt.day && bdt.mon == cdt.mon && bdt.year == cdt.year)
+         // Check it's the same GMT day as current bar
+         if(bdt.day == dt.day && bdt.mon == dt.mon && bdt.year == dt.year)
          {
-            sessionStart = bt;
+            sessionStart = bt;   // Keep raw broker-time value for bar filtering
             break;
          }
       }
@@ -99,7 +105,7 @@ bool UpdateOpeningRange(OpeningRange &orb, string symbol, ENUM_TIMEFRAMES tf,
 
    sessionEnd = sessionStart + orbMinutes * 60;
 
-   // Check if ORB period has elapsed
+   // Check if ORB period has elapsed (both sides are broker time — consistent)
    if(now < sessionEnd) return false;
 
    // Build opening range from bars within [sessionStart, sessionEnd)

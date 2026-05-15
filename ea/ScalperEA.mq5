@@ -143,8 +143,8 @@ void DBG(string msg)
 {
    if(!g_debugMode) return;
    MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   Print(StringFormat("[DBG][%02d:%02d:%02d] %s", dt.hour, dt.min, dt.sec, msg));
+   TimeToStruct(TimeGMT(), dt);
+   Print(StringFormat("[DBG][%02d:%02d:%02d GMT] %s", dt.hour, dt.min, dt.sec, msg));
 }
 
 //====================================================================
@@ -189,7 +189,7 @@ bool IsInSession()
 {
    if(!InpTradeNYOnly) return true;
    MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
+   TimeToStruct(TimeGMT(), dt);   // Always GMT — broker-timezone independent
    return (dt.hour >= InpNYOpenHour && dt.hour < InpNYCloseHour);
 }
 
@@ -256,6 +256,14 @@ void RebuildVolumeProfile(string symbol)
 int OnInit()
 {
    g_debugMode = InpDebug;   // propagate to all .mqh modules (same compilation unit)
+
+   // Log broker GMT offset so user can verify time independence on startup
+   int brokerOffsetHours = (int)MathRound((TimeCurrent() - TimeGMT()) / 3600.0);
+   Print(StringFormat("ScalperEA: Time reference = GMT (TimeGMT) | Broker server offset = %+d h | "
+                      "Broker time: %s | GMT: %s",
+                      brokerOffsetHours,
+                      TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+                      TimeToString(TimeGMT(),     TIME_DATE|TIME_MINUTES)));
 
    g_ofTF = MinutesToTF(InpOFTF_Minutes);
    g_vpTF = MinutesToTF(InpVPTF_Minutes);
@@ -377,7 +385,7 @@ void OnTick()
       bool inSession = IsInSession();
       if(g_debugMode)
       {
-         MqlDateTime dtNow; TimeToStruct(TimeCurrent(), dtNow);
+         MqlDateTime dtNow; TimeToStruct(TimeGMT(), dtNow);
          DBG(StringFormat("Session: %s (GMT hour=%d, window=%d-%d)",
                            inSession ? "IN SESSION ✓" : "OUT OF SESSION — skipping bar",
                            dtNow.hour, InpNYOpenHour, InpNYCloseHour));
@@ -400,7 +408,7 @@ void OnTick()
    // ---- Track day open balance for accurate intraday drawdown ----
    {
       MqlDateTime dt;
-      TimeToStruct(TimeCurrent(), dt);
+      TimeToStruct(TimeGMT(), dt);
       if(dt.day_of_week != g_lastDayOfWeek)
       {
          g_dayOpenBalance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -610,7 +618,7 @@ void OnTick()
             snap.atr        = sig.atr;
             snap.spreadPips = GetSpreadPips(symbol);
             MqlDateTime dtSnap;
-            TimeToStruct(TimeCurrent(), dtSnap);
+            TimeToStruct(TimeGMT(), dtSnap);
             snap.hourGMT = dtSnap.hour;
             AJ_RegisterTrade(posTicket, symbol, sig.direction, applyReverser,
                              sig.entryPrice, sig.stopLoss, sig.tp1, sig.tp2, snap);
