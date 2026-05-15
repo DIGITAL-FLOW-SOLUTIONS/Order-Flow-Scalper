@@ -285,17 +285,16 @@ void GRD_RecordResult(GRD_Phantom &p)
       FileClose(fh);
    }
 
-   if(g_debugMode)
-      DBG(StringFormat("Guardian: pair #%I64u done | NORMAL=%s REV=%s | "
-                        "NormWR=%.0f%% RevWR=%.0f%% [%d samples] → %s",
-                        p.id,
-                        p.normalWon ? "TP✓" : "SL✗",
-                        p.revWon    ? "TP✓" : "SL✗",
-                        g_grd.normalWinRate * 100,
-                        g_grd.revWinRate    * 100,
-                        g_grd.sampleCount,
-                        g_grd.preferReversed ? "PREFER_REVERSED" :
-                        (!g_grd.canTrade)    ? "PAUSE" : "NORMAL"));
+   Print(StringFormat("Guardian: pair #%I64u done | NORMAL=%s REV=%s | "
+                      "NormWR=%.0f%% RevWR=%.0f%% [%d samples] → %s",
+                      p.id,
+                      p.normalWon ? "TP" : "SL",
+                      p.revWon    ? "TP" : "SL",
+                      g_grd.normalWinRate * 100,
+                      g_grd.revWinRate    * 100,
+                      g_grd.sampleCount,
+                      g_grd.preferReversed ? "PREFER_REVERSED" :
+                      (!g_grd.canTrade)    ? "PAUSE_TRADING" : "TRADE_NORMAL"));
 
    p.active = false;
 }

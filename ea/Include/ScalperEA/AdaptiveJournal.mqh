@@ -272,13 +272,13 @@ void AJ_CheckClosedTrades(string symbol)
       }
 
       AJ_WriteRecord(g_aj_trades[i], exitTime, exitPrice, pl, reason);
-      if(g_debugMode)
-         DBG(StringFormat("AJ: closed trade #%I64u — %s  P&L=%.2f  MAE_R=%.2f  MFE_R=%.2f",
-                           g_aj_trades[i].ticket, reason, pl,
-                           (MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) > 0)
-                              ? g_aj_trades[i].mae / MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) : 0,
-                           (MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) > 0)
-                              ? g_aj_trades[i].mfe / MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) : 0));
+
+      double slDist = MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice);
+      double maeR   = (slDist > 0) ? g_aj_trades[i].mae / slDist : 0;
+      double mfeR   = (slDist > 0) ? g_aj_trades[i].mfe / slDist : 0;
+      Print(StringFormat("AdaptiveJournal: #%I64u [%s] logged → %s | P&L=%.2f | MAE=%.2fR MFE=%.2fR | written to %s",
+                          g_aj_trades[i].ticket, g_aj_trades[i].symbol,
+                          reason, pl, maeR, mfeR, g_aj_file));
 
       g_aj_trades[i].active = false;
    }

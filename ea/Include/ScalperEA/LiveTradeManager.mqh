@@ -218,9 +218,9 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
          g_ltm_trades[i].mfe >= g_ltm_trades[i].tp1Dist * g_ltm_mfeThresh)
       {
          g_ltm_trades[i].monitoringActive = true;
-         if(g_debugMode)
-            DBG(StringFormat("LTM: #%I64u MFE threshold HIT (%.0f%% of TP1) — enhanced monitoring ON",
-                              g_ltm_trades[i].ticket, g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100));
+         Print(StringFormat("LiveTradeManager: #%I64u [%s] MFE reached %.0f%% of TP1 — enhanced monitoring ON",
+                             g_ltm_trades[i].ticket, g_ltm_trades[i].symbol,
+                             g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100));
       }
 
       if(!g_ltm_trades[i].monitoringActive) continue;
