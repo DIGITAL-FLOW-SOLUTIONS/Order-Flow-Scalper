@@ -484,18 +484,6 @@ void OnTick()
       return;
    }
 
-   // ---- Guardian: gate trading if phantom data shows no edge ----
-   if(InpGuardianEnabled && !GRD_CanTrade())
-   {
-      Print(StringFormat("Guardian: trading PAUSED | NormWR=%.0f%% RevWR=%.0f%% [%d samples] — waiting for edge",
-                          GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount()));
-      return;
-   }
-   if(InpGuardianEnabled && g_debugMode)
-      DBG(StringFormat("Guardian: NormWR=%.0f%% RevWR=%.0f%% [%d samples] | AutoRev=%s",
-                        GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount(),
-                        GRD_PreferReversed() ? "YES" : "NO"));
-
    // ---- Evaluate all strategy layers ----
    DBG("--- EvaluateEntry ---");
    EntrySignal sig = EvaluateEntry(symbol, g_ofTF, g_vp, g_orb,
@@ -561,6 +549,24 @@ void OnTick()
                           InpReverser ? "manual" : "Guardian-auto"));
    }
 
+   // ---- Guardian: spawn phantom on EVERY valid signal (before real-trade gate) ----
+   // This is critical: phantoms must accumulate even when real trading is blocked,
+   // otherwise Guardian can never collect the data needed to unblock itself.
+   if(InpGuardianEnabled)
+      GRD_SpawnPhantoms(symbol, origDir, sig.entryPrice, sig.slDist, sig.tp1Dist);
+
+   // ---- Guardian: gate real trading if phantom data shows no edge ----
+   if(InpGuardianEnabled && !GRD_CanTrade())
+   {
+      Print(StringFormat("Guardian: trading PAUSED | NormWR=%.0f%% RevWR=%.0f%% [%d samples] — waiting for edge",
+                          GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount()));
+      return;
+   }
+   if(InpGuardianEnabled && g_debugMode)
+      DBG(StringFormat("Guardian: NormWR=%.0f%% RevWR=%.0f%% [%d samples] | AutoRev=%s",
+                        GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount(),
+                        GRD_PreferReversed() ? "YES" : "NO"));
+
    // ---- Signal confirmed — log and place trade ----
    string dirStr = (sig.direction > 0) ? "LONG" : "SHORT";
    Print(StringFormat("ScalperEA SIGNAL | %s %s | Conf=%d | Entry=%.5f SL=%.5f TP1=%.5f TP2=%.5f | [%s]",
@@ -590,11 +596,6 @@ void OnTick()
 
       if(posTicket > 0)
       {
-         // Spawn Guardian phantom pair using ORIGINAL pre-reversal direction
-         // so phantom statistics remain unbiased regardless of REVERSER state
-         if(InpGuardianEnabled)
-            GRD_SpawnPhantoms(symbol, origDir, sig.entryPrice, sig.slDist, sig.tp1Dist);
-
          // Register with Adaptive Journal
          if(InpAdaptiveEnabled)
          {
