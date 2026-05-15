@@ -126,21 +126,20 @@ void AJ_RegisterTrade(ulong ticket, string symbol, int direction,
       Print("AdaptiveJournal: tracking array full — cannot record #", ticket);
       return;
    }
-   AJ_TradeRecord &r = g_aj_trades[slot];
-   r.ticket       = ticket;
-   r.symbol       = symbol;
-   r.direction    = direction;
-   r.wasReversed  = wasReversed;
-   r.entryTime    = TimeCurrent();
-   r.entryPrice   = entryPrice;
-   r.slPrice      = slPrice;
-   r.tp1Price     = tp1Price;
-   r.tp2Price     = tp2Price;
-   r.snap         = snap;
-   r.mfe          = 0;
-   r.mae          = 0;
-   r.barsOpen     = 0;
-   r.active       = true;
+   g_aj_trades[slot].ticket       = ticket;
+   g_aj_trades[slot].symbol       = symbol;
+   g_aj_trades[slot].direction    = direction;
+   g_aj_trades[slot].wasReversed  = wasReversed;
+   g_aj_trades[slot].entryTime    = TimeCurrent();
+   g_aj_trades[slot].entryPrice   = entryPrice;
+   g_aj_trades[slot].slPrice      = slPrice;
+   g_aj_trades[slot].tp1Price     = tp1Price;
+   g_aj_trades[slot].tp2Price     = tp2Price;
+   g_aj_trades[slot].snap         = snap;
+   g_aj_trades[slot].mfe          = 0;
+   g_aj_trades[slot].mae          = 0;
+   g_aj_trades[slot].barsOpen     = 0;
+   g_aj_trades[slot].active       = true;
 
    if(g_debugMode)
       DBG(StringFormat("AJ: registered trade #%I64u %s %s",
@@ -155,21 +154,20 @@ void AJ_UpdateActive(string symbol)
    if(!g_aj_ready) return;
    for(int i = 0; i < AJ_MAX_TRADES; i++)
    {
-      AJ_TradeRecord &r = g_aj_trades[i];
-      if(!r.active || r.symbol != symbol) continue;
-      if(!PositionSelectByTicket(r.ticket)) continue;
+      if(!g_aj_trades[i].active || g_aj_trades[i].symbol != symbol) continue;
+      if(!PositionSelectByTicket(g_aj_trades[i].ticket)) continue;
 
-      double cur = (r.direction > 0)
+      double cur = (g_aj_trades[i].direction > 0)
                    ? SymbolInfoDouble(symbol, SYMBOL_BID)
                    : SymbolInfoDouble(symbol, SYMBOL_ASK);
 
-      double excursion = (r.direction > 0)
-                         ? cur - r.entryPrice
-                         : r.entryPrice - cur;
+      double excursion = (g_aj_trades[i].direction > 0)
+                         ? cur - g_aj_trades[i].entryPrice
+                         : g_aj_trades[i].entryPrice - cur;
 
-      if(excursion > r.mfe)   r.mfe = excursion;
-      if(-excursion > r.mae)  r.mae = -excursion;   // adverse is negative excursion
-      r.barsOpen++;
+      if(excursion > g_aj_trades[i].mfe)   g_aj_trades[i].mfe = excursion;
+      if(-excursion > g_aj_trades[i].mae)  g_aj_trades[i].mae = -excursion;
+      g_aj_trades[i].barsOpen++;
    }
 }
 
@@ -238,17 +236,16 @@ void AJ_CheckClosedTrades(string symbol)
    if(!g_aj_ready) return;
    for(int i = 0; i < AJ_MAX_TRADES; i++)
    {
-      AJ_TradeRecord &r = g_aj_trades[i];
-      if(!r.active || r.symbol != symbol) continue;
-      if(PositionSelectByTicket(r.ticket)) continue;  // still open
+      if(!g_aj_trades[i].active || g_aj_trades[i].symbol != symbol) continue;
+      if(PositionSelectByTicket(g_aj_trades[i].ticket)) continue;  // still open
 
       // Position gone — find the closing deal in history
       datetime exitTime  = TimeCurrent();
-      double   exitPrice = r.entryPrice;
+      double   exitPrice = g_aj_trades[i].entryPrice;
       double   pl        = 0;
       string   reason    = "CLOSED";
 
-      if(HistorySelectByPosition(r.ticket))
+      if(HistorySelectByPosition(g_aj_trades[i].ticket))
       {
          int total = HistoryDealsTotal();
          for(int d = total - 1; d >= 0; d--)
@@ -274,16 +271,16 @@ void AJ_CheckClosedTrades(string symbol)
          }
       }
 
-      AJ_WriteRecord(r, exitTime, exitPrice, pl, reason);
+      AJ_WriteRecord(g_aj_trades[i], exitTime, exitPrice, pl, reason);
       if(g_debugMode)
          DBG(StringFormat("AJ: closed trade #%I64u — %s  P&L=%.2f  MAE_R=%.2f  MFE_R=%.2f",
-                           r.ticket, reason, pl,
-                           (MathAbs(r.entryPrice - r.slPrice) > 0)
-                              ? r.mae / MathAbs(r.entryPrice - r.slPrice) : 0,
-                           (MathAbs(r.entryPrice - r.slPrice) > 0)
-                              ? r.mfe / MathAbs(r.entryPrice - r.slPrice) : 0));
+                           g_aj_trades[i].ticket, reason, pl,
+                           (MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) > 0)
+                              ? g_aj_trades[i].mae / MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) : 0,
+                           (MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) > 0)
+                              ? g_aj_trades[i].mfe / MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice) : 0));
 
-      r.active = false;
+      g_aj_trades[i].active = false;
    }
 }
 

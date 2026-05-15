@@ -149,55 +149,54 @@ void GRD_SpawnPhantoms(string symbol,
 
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
 
-   GRD_Phantom &p = g_grd_phantoms[slot];
-   p.id        = g_grd_nextId++;
-   p.symbol    = symbol;
-   p.openTime  = TimeCurrent();
-   p.active    = true;
-   p.pairComplete = false;
+   g_grd_phantoms[slot].id           = g_grd_nextId++;
+   g_grd_phantoms[slot].symbol       = symbol;
+   g_grd_phantoms[slot].openTime     = TimeCurrent();
+   g_grd_phantoms[slot].active       = true;
+   g_grd_phantoms[slot].pairComplete = false;
 
    // ---- NORMAL leg ----
-   p.normalDir   = signalDir;
+   g_grd_phantoms[slot].normalDir = signalDir;
    if(signalDir > 0)  // LONG
    {
-      p.normalEntry = SymbolInfoDouble(symbol, SYMBOL_ASK);
-      p.normalSL    = NormalizeDouble(p.normalEntry - slDist, digits);
-      p.normalTP    = NormalizeDouble(p.normalEntry + tp1Dist, digits);
+      g_grd_phantoms[slot].normalEntry = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      g_grd_phantoms[slot].normalSL    = NormalizeDouble(g_grd_phantoms[slot].normalEntry - slDist, digits);
+      g_grd_phantoms[slot].normalTP    = NormalizeDouble(g_grd_phantoms[slot].normalEntry + tp1Dist, digits);
    }
    else  // SHORT
    {
-      p.normalEntry = SymbolInfoDouble(symbol, SYMBOL_BID);
-      p.normalSL    = NormalizeDouble(p.normalEntry + slDist, digits);
-      p.normalTP    = NormalizeDouble(p.normalEntry - tp1Dist, digits);
+      g_grd_phantoms[slot].normalEntry = SymbolInfoDouble(symbol, SYMBOL_BID);
+      g_grd_phantoms[slot].normalSL    = NormalizeDouble(g_grd_phantoms[slot].normalEntry + slDist, digits);
+      g_grd_phantoms[slot].normalTP    = NormalizeDouble(g_grd_phantoms[slot].normalEntry - tp1Dist, digits);
    }
-   p.normalClosed = false;
-   p.normalWon    = false;
+   g_grd_phantoms[slot].normalClosed = false;
+   g_grd_phantoms[slot].normalWon    = false;
 
    // ---- REVERSED leg — same distances, opposite direction ----
-   p.revDir = -signalDir;
-   if(p.revDir > 0)  // LONG
+   g_grd_phantoms[slot].revDir = -signalDir;
+   if(g_grd_phantoms[slot].revDir > 0)  // LONG
    {
-      p.revEntry = SymbolInfoDouble(symbol, SYMBOL_ASK);
-      p.revSL    = NormalizeDouble(p.revEntry - slDist, digits);
-      p.revTP    = NormalizeDouble(p.revEntry + tp1Dist, digits);
+      g_grd_phantoms[slot].revEntry = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      g_grd_phantoms[slot].revSL    = NormalizeDouble(g_grd_phantoms[slot].revEntry - slDist, digits);
+      g_grd_phantoms[slot].revTP    = NormalizeDouble(g_grd_phantoms[slot].revEntry + tp1Dist, digits);
    }
    else  // SHORT
    {
-      p.revEntry = SymbolInfoDouble(symbol, SYMBOL_BID);
-      p.revSL    = NormalizeDouble(p.revEntry + slDist, digits);
-      p.revTP    = NormalizeDouble(p.revEntry - tp1Dist, digits);
+      g_grd_phantoms[slot].revEntry = SymbolInfoDouble(symbol, SYMBOL_BID);
+      g_grd_phantoms[slot].revSL    = NormalizeDouble(g_grd_phantoms[slot].revEntry + slDist, digits);
+      g_grd_phantoms[slot].revTP    = NormalizeDouble(g_grd_phantoms[slot].revEntry - tp1Dist, digits);
    }
-   p.revClosed = false;
-   p.revWon    = false;
+   g_grd_phantoms[slot].revClosed = false;
+   g_grd_phantoms[slot].revWon    = false;
 
    if(g_debugMode)
       DBG(StringFormat("Guardian: spawned pair #%I64u | NORMAL %s entry=%.5f SL=%.5f TP=%.5f | "
                         "REV %s entry=%.5f SL=%.5f TP=%.5f",
-                        p.id,
-                        p.normalDir > 0 ? "LONG" : "SHORT",
-                        p.normalEntry, p.normalSL, p.normalTP,
-                        p.revDir > 0 ? "LONG" : "SHORT",
-                        p.revEntry, p.revSL, p.revTP));
+                        g_grd_phantoms[slot].id,
+                        g_grd_phantoms[slot].normalDir > 0 ? "LONG" : "SHORT",
+                        g_grd_phantoms[slot].normalEntry, g_grd_phantoms[slot].normalSL, g_grd_phantoms[slot].normalTP,
+                        g_grd_phantoms[slot].revDir > 0 ? "LONG" : "SHORT",
+                        g_grd_phantoms[slot].revEntry, g_grd_phantoms[slot].revSL, g_grd_phantoms[slot].revTP));
 }
 
 //--------------------------------------------------------------------
@@ -333,36 +332,37 @@ void GRD_UpdateOnTick(string symbol)
 
    for(int i = 0; i < GRD_MAX_ACTIVE; i++)
    {
-      GRD_Phantom &p = g_grd_phantoms[i];
-      if(!p.active || p.symbol != symbol) continue;
+      if(!g_grd_phantoms[i].active || g_grd_phantoms[i].symbol != symbol) continue;
 
       // Check NORMAL leg
-      if(!p.normalClosed)
+      if(!g_grd_phantoms[i].normalClosed)
       {
          bool won = false;
-         if(GRD_CheckLeg(p.normalDir, p.normalEntry, p.normalSL, p.normalTP, symbol, won))
+         if(GRD_CheckLeg(g_grd_phantoms[i].normalDir, g_grd_phantoms[i].normalEntry,
+                         g_grd_phantoms[i].normalSL, g_grd_phantoms[i].normalTP, symbol, won))
          {
-            p.normalClosed = true;
-            p.normalWon    = won;
+            g_grd_phantoms[i].normalClosed = true;
+            g_grd_phantoms[i].normalWon    = won;
          }
       }
 
       // Check REVERSED leg
-      if(!p.revClosed)
+      if(!g_grd_phantoms[i].revClosed)
       {
          bool won = false;
-         if(GRD_CheckLeg(p.revDir, p.revEntry, p.revSL, p.revTP, symbol, won))
+         if(GRD_CheckLeg(g_grd_phantoms[i].revDir, g_grd_phantoms[i].revEntry,
+                         g_grd_phantoms[i].revSL, g_grd_phantoms[i].revTP, symbol, won))
          {
-            p.revClosed = true;
-            p.revWon    = won;
+            g_grd_phantoms[i].revClosed = true;
+            g_grd_phantoms[i].revWon    = won;
          }
       }
 
       // If BOTH legs have resolved, record results
-      if(p.normalClosed && p.revClosed && !p.pairComplete)
+      if(g_grd_phantoms[i].normalClosed && g_grd_phantoms[i].revClosed && !g_grd_phantoms[i].pairComplete)
       {
-         p.pairComplete = true;
-         GRD_RecordResult(p);
+         g_grd_phantoms[i].pairComplete = true;
+         GRD_RecordResult(g_grd_phantoms[i]);
       }
    }
 }
