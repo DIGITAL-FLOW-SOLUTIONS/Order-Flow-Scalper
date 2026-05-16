@@ -60,11 +60,11 @@ struct GRD_State
    int   totalCompleted;   // total pairs completed today
 
    // Decision outputs (refreshed after every pair completes)
-   bool  canTrade;         // last 2 pairs agree on a direction
-   bool  preferReversed;   // last 2 both say reversed wins
+   bool  canTrade;         // last g_grd_minSamp pairs all agree on a direction
+   bool  preferReversed;   // last g_grd_minSamp pairs all say reversed wins
 
    // Daily tracking
-   int   lastGMTDay;       // calendar day of last reset (-1 = uninitialised)
+   int   lastGMTDay;       // GMT calendar day of last reset (set to today on init)
 };
 
 GRD_Phantom g_grd_phantoms[GRD_MAX_ACTIVE];
@@ -425,11 +425,12 @@ void GRD_SpawnPhantoms(string symbol,
    g_grd_phantoms[slot].revWon    = false;
 
    if(g_debugMode)
-      DBG(StringFormat("Guardian: spawned pair #%I64u | "
+      DBG(StringFormat("Guardian: spawned pair #%I64u | signal@%.5f | "
                        "NORMAL %s entry=%.5f SL=%.5f TP=%.5f | "
                        "REV %s entry=%.5f SL=%.5f TP=%.5f | "
                        "today=%d pairs completed",
                        g_grd_phantoms[slot].id,
+                       entryPrice,
                        g_grd_phantoms[slot].normalDir > 0 ? "LONG" : "SHORT",
                        g_grd_phantoms[slot].normalEntry,
                        g_grd_phantoms[slot].normalSL,

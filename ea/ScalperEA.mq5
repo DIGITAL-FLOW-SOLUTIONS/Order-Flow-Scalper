@@ -566,7 +566,7 @@ void OnTick()
    {
       Print(StringFormat("Guardian [%s]: WAITING — %d phantom pair(s) today, "
                          "need last %d to agree on direction before real trade",
-                         symbol, GRD_SampleCount(), 2));
+                         symbol, GRD_SampleCount(), InpGRD_MinSample));
       return;
    }
    if(InpGuardianEnabled && g_debugMode)
