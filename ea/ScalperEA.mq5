@@ -92,6 +92,17 @@ input group "=== Adaptive Journal ==="
 input bool     InpAdaptiveEnabled = true;         // Enable trade journal (CSV)
 input string   InpJournalFile     = "ScalperEA_Journal.csv"; // Journal filename
 
+// === Adaptive Intelligence ===
+// Uses the journal's rolling stats cache to shape future trade decisions.
+// Requires InpAdaptiveEnabled = true. Has no effect until InpAJMinSamples
+// trades have been recorded (cold-start protection).
+input group "=== Adaptive Intelligence ==="
+input bool     InpAJAdaptSLTP   = true;  // Scale SL/TP from winner MAE/MFE stats
+input bool     InpAJAdaptFilter = true;  // Raise confluence/spread bar when win rate falls
+input bool     InpAJAdaptLTM   = true;  // Exit early when trade matches loser profile
+input int      InpAJLookback    = 20;   // Rolling window: trades to analyse for stats
+input int      InpAJMinSamples  = 10;   // Min trades before adaptive logic activates
+
 // === Guardian — Phantom Trade Layer ===
 // Spawns imaginary NORMAL + REVERSED trade pairs on each signal.
 // Monitors which side hits TP vs SL to determine real-time edge.
@@ -510,6 +521,35 @@ void OnTick()
       sig.direction = 0;
    }
 
+   // ---- Adaptive Intelligence: dynamic signal quality filter ----
+   // Raises the entry bar when the journal's rolling stats show the EA is
+   // underperforming. Both filters require InpAJMinSamples trades first.
+   if(sig.direction != 0 && InpAdaptiveEnabled && InpAJAdaptFilter
+      && AJ_HasStats(InpAJMinSamples))
+   {
+      int dynMinConf = AJ_GetDynamicMinConfluence(InpMinConfluence, InpAJLookback);
+      if(sig.confluence < dynMinConf)
+      {
+         DBG(StringFormat("AJ Filter: confluence %d < dynamic min %d "
+                          "(win rate low, base=%d) → skip",
+                           sig.confluence, dynMinConf, InpMinConfluence));
+         sig.direction = 0;
+      }
+   }
+   if(sig.direction != 0 && InpAdaptiveEnabled && InpAJAdaptFilter
+      && AJ_HasStats(InpAJMinSamples))
+   {
+      double dynMaxSprd = AJ_GetDynamicSpreadLimit(InpSpreadMaxPips, InpAJLookback);
+      double curSpread  = GetSpreadPips(symbol);
+      if(curSpread > dynMaxSprd)
+      {
+         DBG(StringFormat("AJ Filter: spread %.2f pips > dynamic limit %.2f pips "
+                          "(win rate low) → skip",
+                           curSpread, dynMaxSprd));
+         sig.direction = 0;
+      }
+   }
+
    if(sig.direction == 0)
    {
       DBG(StringFormat("No valid signal | [%s]", sig.reason != "" ? sig.reason : "none"));
@@ -559,6 +599,49 @@ void OnTick()
                           InpReverser ? "manual" : "Guardian-auto"));
    }
 
+   // ---- Adaptive Intelligence: scale SL/TP from journal performance stats ----
+   // Uses winner MAE_R to set a SL that accommodates real market noise,
+   // and winner MFE_R to set a TP that matches what the market actually delivers.
+   // Hour-of-day multiplier widens the SL further during historically noisy hours.
+   // Only activates after InpAJMinSamples closed trades are in the cache.
+   if(InpAdaptiveEnabled && InpAJAdaptSLTP && AJ_HasStats(InpAJMinSamples))
+   {
+      int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      MqlDateTime dtAdj;
+      TimeToStruct(TimeGMT(), dtAdj);
+
+      double slMult   = AJ_GetSuggestedSLMult(InpAJLookback);
+      double tpMult   = AJ_GetSuggestedTPMult(InpAJLookback);
+      double hourMult = AJ_GetHourSLMult(dtAdj.hour, InpAJLookback);
+
+      // Combine base SL multiplier with hour-of-day adjustment; hard-clamp result
+      slMult = MathMax(0.75, MathMin(1.50, slMult * hourMult));
+      tpMult = MathMax(0.70, MathMin(1.30, tpMult));
+
+      double tp2Dist  = MathAbs(sig.tp2 - sig.entryPrice);   // TP2 distance preserved
+      sig.slDist  *= slMult;
+      sig.tp1Dist *= tpMult;
+
+      if(sig.direction > 0)
+      {
+         sig.stopLoss = NormalizeDouble(sig.entryPrice - sig.slDist,  digits);
+         sig.tp1      = NormalizeDouble(sig.entryPrice + sig.tp1Dist, digits);
+         sig.tp2      = NormalizeDouble(sig.entryPrice + tp2Dist,     digits);
+      }
+      else
+      {
+         sig.stopLoss = NormalizeDouble(sig.entryPrice + sig.slDist,  digits);
+         sig.tp1      = NormalizeDouble(sig.entryPrice - sig.tp1Dist, digits);
+         sig.tp2      = NormalizeDouble(sig.entryPrice - tp2Dist,     digits);
+      }
+
+      Print(StringFormat("AJ Adaptive [%s]: SL×%.2f (base×%.2f, hour[%02d]×%.2f) | "
+                         "TP×%.2f | SL=%.5f TP1=%.5f",
+                          symbol, slMult,
+                          AJ_GetSuggestedSLMult(InpAJLookback), dtAdj.hour, hourMult,
+                          tpMult, sig.stopLoss, sig.tp1));
+   }
+
    // ---- Guardian: spawn phantom on EVERY valid signal (before real-trade gate) ----
    // This is critical: phantoms must accumulate even when real trading is blocked,
    // otherwise Guardian can never collect the data needed to unblock itself.
@@ -578,6 +661,23 @@ void OnTick()
                         symbol, GRD_SampleCount(),
                         GRD_PreferReversed() ? "REVERSED" : "NORMAL",
                         GRD_PreferReversed() ? "YES" : "NO"));
+
+   // ---- Adaptive Intelligence: reversal streak advisory ----
+   // 3+ consecutive ReversalWouldWin flags in the journal suggests the EA has
+   // been firing in the wrong direction repeatedly. This is an early-warning
+   // advisory — Guardian's phantom layer handles the actual gate, but this log
+   // provides a human-readable alert that a regime shift may be in progress.
+   if(InpAdaptiveEnabled && AJ_HasStats(InpAJMinSamples))
+   {
+      int streak = AJ_GetReversalStreak();
+      if(streak >= 3)
+         Print(StringFormat("AJ Advisory [%s]: %d consecutive ReversalWouldWin — "
+                            "possible regime shift | Guardian: %s | AutoReverse: %s",
+                             symbol, streak,
+                             (InpGuardianEnabled && GRD_CanTrade()) ? "CLEARED" :
+                             InpGuardianEnabled                     ? "GATING"  : "OFF",
+                             (InpAutoReverse && GRD_PreferReversed()) ? "ACTIVE" : "inactive"));
+   }
 
    // ---- Signal confirmed — log and place trade ----
    string dirStr = (sig.direction > 0) ? "LONG" : "SHORT";

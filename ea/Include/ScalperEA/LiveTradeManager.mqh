@@ -3,6 +3,12 @@
 //|  Monitors open trades against live market conditions.           |
 //|  Uses signal re-evaluation to decide when to take profit early  |
 //|  vs when to hold. Never closes at a loss — SL handles that.    |
+//|                                                                  |
+//|  Rule 1: MFE retraced → take remaining profit before giving    |
+//|           it all back.                                          |
+//|  Rule 2: Signal flips against trade → exit while in profit.    |
+//|  Rule 3: AJ pattern — trade matches loser profile from journal  |
+//|           stats → exit at small gain before familiar loss.      |
 //+------------------------------------------------------------------+
 #ifndef LIVETRADEMANAGER_MQH
 #define LIVETRADEMANAGER_MQH
@@ -19,22 +25,23 @@ struct LTM_TradeState
 {
    ulong    ticket;
    string   symbol;
-   int      direction;       // +1=LONG  -1=SHORT
+   int      direction;         // +1=LONG  -1=SHORT
    double   entryPrice;
    double   slPrice;
-   double   tp1Price;        // TP1 used as reference for MFE threshold
-   double   mfe;             // Max Favorable Excursion (price terms, always >=0)
-   double   mae;             // Max Adverse Excursion  (price terms, always >=0)
-   double   tp1Dist;         // tp1Price - entryPrice (absolute, always positive)
-   bool     monitoringActive;  // MFE threshold has been hit — enhanced monitoring on
+   double   tp1Price;          // TP1 used as reference for MFE threshold
+   double   mfe;               // Max Favorable Excursion (price terms, always >=0)
+   double   mae;               // Max Adverse Excursion  (price terms, always >=0)
+   double   tp1Dist;           // |tp1Price - entryPrice| (absolute, always positive)
+   int      barsOpen;          // bars this trade has been open (incremented each manage call)
+   bool     monitoringActive;  // MFE threshold hit — enhanced monitoring on
    bool     active;
 };
 
 LTM_TradeState g_ltm_trades[LTM_MAX_TRADES];
 bool           g_ltm_ready       = false;
-double         g_ltm_mfeThresh   = 0.50;   // MFE as fraction of TP1 dist to activate
-double         g_ltm_retracePct  = 0.80;   // Close if MFE retraces this fraction
-int            g_ltm_flipConf    = 2;      // Min confluence for signal-flip close
+double         g_ltm_mfeThresh   = 0.50;
+double         g_ltm_retracePct  = 0.80;
+int            g_ltm_flipConf    = 2;
 
 //--------------------------------------------------------------------
 //  Initialise — call in OnInit()
@@ -72,7 +79,7 @@ int LTM_FindSlot(ulong ticket)
 }
 
 //--------------------------------------------------------------------
-//  Register a newly placed trade with the Live Trade Manager
+//  Register a newly placed trade
 //--------------------------------------------------------------------
 void LTM_RegisterTrade(ulong ticket, string symbol, int direction,
                        double entryPrice, double slPrice, double tp1Price)
@@ -93,6 +100,7 @@ void LTM_RegisterTrade(ulong ticket, string symbol, int direction,
    g_ltm_trades[slot].tp1Dist          = MathAbs(tp1Price - entryPrice);
    g_ltm_trades[slot].mfe              = 0;
    g_ltm_trades[slot].mae              = 0;
+   g_ltm_trades[slot].barsOpen         = 0;
    g_ltm_trades[slot].monitoringActive = false;
    g_ltm_trades[slot].active           = true;
 
@@ -127,9 +135,7 @@ void LTM_SyncClosed(string symbol)
 
 //--------------------------------------------------------------------
 //  Re-evaluate the market signal for an open trade.
-//  Returns +1 (bullish), -1 (bearish), 0 (neutral) with the
-//  confluence count as an output parameter.
-//  Uses OrderFlow score + VP bias — fastest live indicators.
+//  Returns +1 (bullish), -1 (bearish), 0 (neutral).
 //--------------------------------------------------------------------
 int LTM_ReEvaluate(string symbol, ENUM_TIMEFRAMES tf,
                    const VolumeProfile &vp, int &confluence)
@@ -141,7 +147,6 @@ int LTM_ReEvaluate(string symbol, ENUM_TIMEFRAMES tf,
    int vpBias  = 0;
    if(vp.isValid)
    {
-      // Price below VAL → bullish pressure; above VAH → bearish
       if(price <= vp.val + atr * 0.3) vpBias++;
       if(price >= vp.vah - atr * 0.3) vpBias--;
       if(price > vp.vah + atr * 0.1)  vpBias++;
@@ -150,35 +155,29 @@ int LTM_ReEvaluate(string symbol, ENUM_TIMEFRAMES tf,
 
    int longScore  = 0;
    int shortScore = 0;
-
    if(ofScore > 1)  longScore  += (ofScore > 2 ? 2 : 1);
    if(ofScore < -1) shortScore += (-ofScore > 2 ? 2 : 1);
    if(vpBias  > 0)  longScore++;
    if(vpBias  < 0)  shortScore++;
-
-   // Delta divergence adds weight
    int ddv = CalcDeltaDivergence(symbol, tf);
    if(ddv > 0) longScore++;
    if(ddv < 0) shortScore++;
 
-   if(longScore > shortScore)
-   {
-      confluence = longScore;
-      return 1;
-   }
-   if(shortScore > longScore)
-   {
-      confluence = shortScore;
-      return -1;
-   }
+   if(longScore > shortScore)  { confluence = longScore;  return  1; }
+   if(shortScore > longScore)  { confluence = shortScore; return -1; }
    confluence = 0;
    return 0;
 }
 
 //--------------------------------------------------------------------
-//  Main management loop — call each new bar for each open trade
-//  This runs IN ADDITION to the basic BE/trail in ManagePositions.
-//  It handles the intelligent exit decisions only.
+//  Main management loop — call each new bar.
+//  Runs IN ADDITION to the basic BE/trail in ManagePositions.
+//
+//  Rule 1: MFE retraced most of the gain → take remaining profit.
+//  Rule 2: Signal flipped with conviction → exit while in profit.
+//  Rule 3: Trade matches journal loser profile → exit at small gain.
+//          (Only active when InpAdaptiveEnabled && InpAJAdaptLTM
+//           and AJ_HasStats(InpAJMinSamples) is true.)
 //--------------------------------------------------------------------
 void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
                          const VolumeProfile &vp, CTrade &trade)
@@ -189,17 +188,18 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
    {
       if(!g_ltm_trades[i].active || g_ltm_trades[i].symbol != symbol) continue;
 
-      // Check position still open
       if(!PositionSelectByTicket(g_ltm_trades[i].ticket))
       {
          g_ltm_trades[i].active = false;
          continue;
       }
 
-      double curPrice = (g_ltm_trades[i].direction > 0)
-                        ? SymbolInfoDouble(symbol, SYMBOL_BID)
-                        : SymbolInfoDouble(symbol, SYMBOL_ASK);
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      // Increment bar counter (LTM runs once per new bar)
+      g_ltm_trades[i].barsOpen++;
+
+      double curPrice  = (g_ltm_trades[i].direction > 0)
+                         ? SymbolInfoDouble(symbol, SYMBOL_BID)
+                         : SymbolInfoDouble(symbol, SYMBOL_ASK);
       double profit    = PositionGetDouble(POSITION_PROFIT);
 
       // ---- Update MFE / MAE ----
@@ -207,8 +207,8 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
                          ? curPrice - g_ltm_trades[i].entryPrice
                          : g_ltm_trades[i].entryPrice - curPrice;
 
-      if(excursion > g_ltm_trades[i].mfe)   g_ltm_trades[i].mfe = excursion;
-      if(-excursion > g_ltm_trades[i].mae)  g_ltm_trades[i].mae = -excursion;
+      if( excursion > g_ltm_trades[i].mfe) g_ltm_trades[i].mfe =  excursion;
+      if(-excursion > g_ltm_trades[i].mae) g_ltm_trades[i].mae = -excursion;
 
       // ---- Never close a losing trade (SL handles it) ----
       if(excursion < 0) continue;
@@ -218,16 +218,16 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
          g_ltm_trades[i].mfe >= g_ltm_trades[i].tp1Dist * g_ltm_mfeThresh)
       {
          g_ltm_trades[i].monitoringActive = true;
-         Print(StringFormat("LiveTradeManager: #%I64u [%s] MFE reached %.0f%% of TP1 — enhanced monitoring ON",
+         Print(StringFormat("LiveTradeManager: #%I64u [%s] MFE reached %.0f%% of TP1 "
+                            "— enhanced monitoring ON | bars=%d",
                              g_ltm_trades[i].ticket, g_ltm_trades[i].symbol,
-                             g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100));
+                             g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100,
+                             g_ltm_trades[i].barsOpen));
       }
 
       if(!g_ltm_trades[i].monitoringActive) continue;
 
       // ---- Rule 1: Price has retraced most of the MFE gain ----
-      // If price was at MFE and has come back to < 20% of that gain,
-      // take what's left rather than give it all back.
       bool retracedMostOfGain = (g_ltm_trades[i].mfe > 0 && excursion >= 0 &&
                                   excursion < g_ltm_trades[i].mfe * (1.0 - g_ltm_retracePct));
 
@@ -237,6 +237,18 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
       bool signalFlipped = (reEval != 0 &&
                             reEval != g_ltm_trades[i].direction &&
                             confluence >= g_ltm_flipConf);
+
+      // ---- Rule 3: Journal pattern — matches typical loser profile ----
+      bool ajPatternExit = false;
+      if(InpAdaptiveEnabled && InpAJAdaptLTM && AJ_HasStats(InpAJMinSamples))
+      {
+         double slDist  = MathAbs(g_ltm_trades[i].entryPrice - g_ltm_trades[i].slPrice);
+         double curMFER = (slDist > 0 && excursion > 0) ? excursion / slDist : 0;
+         ajPatternExit  = AJ_ShouldExitEarly(curMFER, g_ltm_trades[i].barsOpen, InpAJLookback);
+         if(ajPatternExit && g_debugMode)
+            DBG(StringFormat("LTM Rule3: #%I64u AJ pattern match | curMFE_R=%.2f bars=%d",
+                              g_ltm_trades[i].ticket, curMFER, g_ltm_trades[i].barsOpen));
+      }
 
       // ---- Decision ----
       string closeReason = "";
@@ -249,51 +261,52 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
       }
       else if(retracedMostOfGain && !signalFlipped)
       {
-         // Price retraced a lot but signal not yet flipped — borderline case.
-         // Only close if MFE was very significant (>80% of TP1) meaning real
-         // profit is at risk.
          if(g_ltm_trades[i].mfe >= g_ltm_trades[i].tp1Dist * 0.80)
          {
             closeReason = "LTM_RETRACE_DEEP";
             shouldClose = true;
          }
-         else
-         {
-            if(g_debugMode)
-               DBG(StringFormat("LTM: #%I64u retrace detected but signal neutral & MFE moderate — HOLDING",
-                                  g_ltm_trades[i].ticket));
-         }
+         else if(g_debugMode)
+            DBG(StringFormat("LTM: #%I64u retrace detected but signal neutral & MFE moderate — HOLDING",
+                               g_ltm_trades[i].ticket));
       }
       else if(signalFlipped && !retracedMostOfGain)
       {
-         // Signal flipped but price hasn't retraced much yet.
-         // Only act if we're in decent profit (>50% to TP1).
          if(excursion >= g_ltm_trades[i].tp1Dist * 0.50)
          {
             closeReason = "LTM_SIGNAL_FLIP";
             shouldClose = true;
          }
-         else
-         {
-            if(g_debugMode)
-               DBG(StringFormat("LTM: #%I64u signal flipped but profit only %.0f%% of TP — holding for now",
-                                  g_ltm_trades[i].ticket,
-                                  excursion / (g_ltm_trades[i].tp1Dist > 0 ? g_ltm_trades[i].tp1Dist : 1) * 100));
-         }
+         else if(g_debugMode)
+            DBG(StringFormat("LTM: #%I64u signal flipped but profit only %.0f%% of TP — holding for now",
+                               g_ltm_trades[i].ticket,
+                               excursion / (g_ltm_trades[i].tp1Dist > 0 ? g_ltm_trades[i].tp1Dist : 1) * 100));
+      }
+      else if(ajPatternExit && !retracedMostOfGain && !signalFlipped)
+      {
+         // Rules 1 & 2 not triggered, but journal history says this trade looks
+         // like the ones that fail. Exit at a small gain before the pattern completes.
+         closeReason = "LTM_AJ_PATTERN";
+         shouldClose = true;
       }
 
       // ---- Execute close ----
       if(shouldClose)
       {
-         if(g_debugMode)
-            DBG(StringFormat("LTM: #%I64u CLOSING — reason=%s | profit=%.2f | MFE=%.5f excursion=%.5f",
-                              g_ltm_trades[i].ticket, closeReason, profit, g_ltm_trades[i].mfe, excursion));
+         double slDistLog = MathAbs(g_ltm_trades[i].entryPrice - g_ltm_trades[i].slPrice);
+         double mfeRLog   = (slDistLog > 0) ? g_ltm_trades[i].mfe / slDistLog : 0;
 
-         Print(StringFormat("LiveTradeManager: closing #%I64u [%s] | P&L=%.2f | MFE_R=%.2fx | %s",
+         if(g_debugMode)
+            DBG(StringFormat("LTM: #%I64u CLOSING — reason=%s | profit=%.2f | "
+                              "MFE=%.5f (%.2fR) | excursion=%.5f | bars=%d",
+                              g_ltm_trades[i].ticket, closeReason, profit,
+                              g_ltm_trades[i].mfe, mfeRLog, excursion,
+                              g_ltm_trades[i].barsOpen));
+
+         Print(StringFormat("LiveTradeManager: closing #%I64u [%s] | P&L=%.2f | "
+                            "MFE=%.2fR | bars=%d | %s",
                              g_ltm_trades[i].ticket, symbol, profit,
-                             (MathAbs(g_ltm_trades[i].entryPrice - g_ltm_trades[i].slPrice) > 0)
-                                ? g_ltm_trades[i].mfe / MathAbs(g_ltm_trades[i].entryPrice - g_ltm_trades[i].slPrice) : 0,
-                             closeReason));
+                             mfeRLog, g_ltm_trades[i].barsOpen, closeReason));
 
          trade.PositionClose(g_ltm_trades[i].ticket);
          AJ_NotifyClose(g_ltm_trades[i].ticket, closeReason);
@@ -301,12 +314,15 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
       }
       else if(g_debugMode)
       {
-         DBG(StringFormat("LTM: #%I64u %s | MFE=%.5f (%.0f%% TP1) | cur_excur=%.5f | signal=%+d conf=%d | HOLD",
-                           g_ltm_trades[i].ticket,
-                           g_ltm_trades[i].monitoringActive ? "MONITORED" : "watching",
-                           g_ltm_trades[i].mfe,
-                           g_ltm_trades[i].tp1Dist > 0 ? g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100 : 0,
-                           excursion, reEval, confluence));
+         DBG(StringFormat("LTM: #%I64u %s | MFE=%.5f (%.0f%% TP1) | "
+                           "excursion=%.5f | signal=%+d conf=%d | bars=%d | HOLD",
+                            g_ltm_trades[i].ticket,
+                            g_ltm_trades[i].monitoringActive ? "MONITORED" : "watching",
+                            g_ltm_trades[i].mfe,
+                            g_ltm_trades[i].tp1Dist > 0
+                               ? g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100 : 0,
+                            excursion, reEval, confluence,
+                            g_ltm_trades[i].barsOpen));
       }
    }
 }
