@@ -1,7 +1,8 @@
 //+------------------------------------------------------------------+
 //|  AdaptiveJournal.mqh  —  Adaptive Trade Journal                  |
 //|  Records every real trade with full signal conditions,           |
-//|  tracks MAE/MFE while open, writes CSV on close.                |
+//|  tracks MAE/MFE on every tick while open, writes CSV on close.  |
+//|  Each symbol gets its own CSV: ScalperEA_Journal_SYMBOL.csv     |
 //|  CSV lives in: MT5/MQL5/Files/  (standard Files folder)         |
 //+------------------------------------------------------------------+
 #ifndef ADAPTIVEJOURNAL_MQH
@@ -42,15 +43,15 @@ struct AJ_TradeRecord
    double      tp1Price;
    double      tp2Price;
    AJ_Snapshot snap;
-   // Running stats updated every bar
-   double      mfe;              // Max Favorable Excursion in price
-   double      mae;              // Max Adverse Excursion in price (stored positive)
+   // Running extremes — updated on EVERY TICK to capture intra-bar spikes
+   double      mfe;              // Max Favorable Excursion in price (best move in trade direction)
+   double      mae;              // Max Adverse Excursion in price (worst move against, stored positive)
    int         barsOpen;
    bool        active;
 };
 
 AJ_TradeRecord g_aj_trades[AJ_MAX_TRADES];
-string         g_aj_file = AJ_CSV_DEFAULT;
+string         g_aj_file  = AJ_CSV_DEFAULT;
 bool           g_aj_ready = false;
 
 //--------------------------------------------------------------------
@@ -76,10 +77,18 @@ void AJ_WriteHeader(string filename)
 
 //--------------------------------------------------------------------
 //  Initialise — call once in OnInit()
+//
+//  symbol   : EA's chart symbol (_Symbol)
+//  filename : leave as default "" to auto-generate per-symbol file;
+//             explicit path overrides auto-generation
 //--------------------------------------------------------------------
-void AJ_Init(string filename = AJ_CSV_DEFAULT)
+void AJ_Init(string symbol, string filename = AJ_CSV_DEFAULT)
 {
-   g_aj_file = filename;
+   // Each symbol gets its own log so multiple EA instances never conflict
+   g_aj_file = (filename == "" || filename == AJ_CSV_DEFAULT)
+               ? "ScalperEA_Journal_" + symbol + ".csv"
+               : filename;
+
    for(int i = 0; i < AJ_MAX_TRADES; i++)
       g_aj_trades[i].active = false;
 
@@ -87,7 +96,7 @@ void AJ_Init(string filename = AJ_CSV_DEFAULT)
       AJ_WriteHeader(g_aj_file);
 
    g_aj_ready = true;
-   Print("AdaptiveJournal: ready — logging to ", g_aj_file);
+   Print("AdaptiveJournal [", symbol, "]: ready — logging to ", g_aj_file);
 }
 
 //--------------------------------------------------------------------
@@ -147,9 +156,13 @@ void AJ_RegisterTrade(ulong ticket, string symbol, int direction,
 }
 
 //--------------------------------------------------------------------
-//  Update MAE/MFE for all open tracked trades — call each new bar
+//  Update MAE/MFE for all open tracked trades — call on EVERY TICK.
+//
+//  Tick-level sampling ensures intra-bar price spikes are captured.
+//  A bar that moves 100 pips then reverses is correctly recorded —
+//  the full 100-pip adverse (or favorable) move is never missed.
 //--------------------------------------------------------------------
-void AJ_UpdateActive(string symbol)
+void AJ_UpdateOnTick(string symbol)
 {
    if(!g_aj_ready) return;
    for(int i = 0; i < AJ_MAX_TRADES; i++)
@@ -161,12 +174,28 @@ void AJ_UpdateActive(string symbol)
                    ? SymbolInfoDouble(symbol, SYMBOL_BID)
                    : SymbolInfoDouble(symbol, SYMBOL_ASK);
 
+      // excursion > 0 means price moved in trade direction (favourable)
+      // excursion < 0 means price moved against the trade (adverse)
       double excursion = (g_aj_trades[i].direction > 0)
                          ? cur - g_aj_trades[i].entryPrice
                          : g_aj_trades[i].entryPrice - cur;
 
-      if(excursion > g_aj_trades[i].mfe)   g_aj_trades[i].mfe = excursion;
-      if(-excursion > g_aj_trades[i].mae)  g_aj_trades[i].mae = -excursion;
+      if(excursion  >  g_aj_trades[i].mfe) g_aj_trades[i].mfe =  excursion;
+      if(-excursion >  g_aj_trades[i].mae) g_aj_trades[i].mae = -excursion;
+   }
+}
+
+//--------------------------------------------------------------------
+//  Increment bar counter for all open tracked trades — call each new bar.
+//  Kept separate from AJ_UpdateOnTick so bar counting stays bar-accurate.
+//--------------------------------------------------------------------
+void AJ_IncrementBars(string symbol)
+{
+   if(!g_aj_ready) return;
+   for(int i = 0; i < AJ_MAX_TRADES; i++)
+   {
+      if(!g_aj_trades[i].active || g_aj_trades[i].symbol != symbol) continue;
+      if(!PositionSelectByTicket(g_aj_trades[i].ticket)) continue;
       g_aj_trades[i].barsOpen++;
    }
 }
@@ -184,7 +213,7 @@ void AJ_WriteRecord(const AJ_TradeRecord &r,
 
    // "Would reversal have won?" — reversal wins if the trade lost AND
    // the reversed direction had a favorable price move.
-   // Approximation: if we lost and MFE was <0.3R while MAE >1R → reversal likely won.
+   // Approximation: if we lost and MFE was <0.3R while MAE >0.8R → reversal likely won.
    bool reversalWouldWin = (profitLoss < 0 && mfeR < 0.3 && maeR > 0.8);
 
    int fh = FileOpen(g_aj_file, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
@@ -228,8 +257,12 @@ void AJ_WriteRecord(const AJ_TradeRecord &r,
 }
 
 //--------------------------------------------------------------------
-//  Detect any tracked trades that have closed, write them to CSV
-//  Call each new bar for the EA's symbol
+//  Detect any tracked trades that have closed, write them to CSV.
+//  Call each new bar for the EA's symbol.
+//
+//  Exit price fallback: if deal history is unavailable, the current
+//  live bid/ask is used as an approximation and the exit reason is
+//  stamped "UNKNOWN_HIST" so the row can be identified in analysis.
 //--------------------------------------------------------------------
 void AJ_CheckClosedTrades(string symbol)
 {
@@ -239,11 +272,13 @@ void AJ_CheckClosedTrades(string symbol)
       if(!g_aj_trades[i].active || g_aj_trades[i].symbol != symbol) continue;
       if(PositionSelectByTicket(g_aj_trades[i].ticket)) continue;  // still open
 
-      // Position gone — find the closing deal in history
+      // Position gone — use live price as fallback; override below if history found
       datetime exitTime  = TimeGMT();
-      double   exitPrice = g_aj_trades[i].entryPrice;
+      double   exitPrice = (g_aj_trades[i].direction > 0)
+                           ? SymbolInfoDouble(symbol, SYMBOL_BID)
+                           : SymbolInfoDouble(symbol, SYMBOL_ASK);
       double   pl        = 0;
-      string   reason    = "CLOSED";
+      string   reason    = "UNKNOWN_HIST";   // stamped if history lookup fails
 
       if(HistorySelectByPosition(g_aj_trades[i].ticket))
       {
@@ -270,33 +305,40 @@ void AJ_CheckClosedTrades(string symbol)
             }
          }
       }
+      else
+      {
+         Print(StringFormat("AdaptiveJournal: WARNING — deal history not found for #%I64u "
+                            "| using live %s price fallback | row marked UNKNOWN_HIST",
+                            g_aj_trades[i].ticket,
+                            g_aj_trades[i].direction > 0 ? "BID" : "ASK"));
+      }
 
       AJ_WriteRecord(g_aj_trades[i], exitTime, exitPrice, pl, reason);
 
       double slDist = MathAbs(g_aj_trades[i].entryPrice - g_aj_trades[i].slPrice);
       double maeR   = (slDist > 0) ? g_aj_trades[i].mae / slDist : 0;
       double mfeR   = (slDist > 0) ? g_aj_trades[i].mfe / slDist : 0;
-      Print(StringFormat("AdaptiveJournal: #%I64u [%s] logged → %s | P&L=%.2f | MAE=%.2fR MFE=%.2fR | written to %s",
+      Print(StringFormat("AdaptiveJournal: #%I64u [%s] logged → %s | P&L=%.2f | "
+                         "MAE=%.2fR MFE=%.2fR | bars=%d | written to %s",
                           g_aj_trades[i].ticket, g_aj_trades[i].symbol,
-                          reason, pl, maeR, mfeR, g_aj_file));
+                          reason, pl, maeR, mfeR,
+                          g_aj_trades[i].barsOpen, g_aj_file));
 
       g_aj_trades[i].active = false;
    }
 }
 
 //--------------------------------------------------------------------
-//  External close notification — called by Live Trade Manager
-//  so the exit reason is recorded correctly before AJ_CheckClosed runs
+//  External close notification — called by Live Trade Manager.
+//  Currently a debug hook; AJ_CheckClosedTrades picks up DEAL_REASON_EXPERT
+//  from the deal history and records ExitReason = "EA_CLOSE" automatically.
+//  This function exists as an annotation point for future refinement
+//  (e.g. stamping a more specific LTM sub-reason into the CSV row).
 //--------------------------------------------------------------------
 void AJ_NotifyClose(ulong ticket, string reason)
 {
    int slot = AJ_FindSlot(ticket);
    if(slot < 0) return;
-   // Override the reason so AJ_CheckClosedTrades picks it up correctly
-   // We do this by marking a custom reason via a small trick:
-   // We'll just let AJ_CheckClosed handle it, the DEAL_REASON will say EXPERT
-   // The reason string is passed from LTM in the deal comment — logged already
-   // This function is a hook for future use / additional annotation
    if(g_debugMode)
       DBG(StringFormat("AJ: close notification for #%I64u — %s", ticket, reason));
 }

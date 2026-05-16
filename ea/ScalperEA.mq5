@@ -281,7 +281,7 @@ int OnInit()
 
    // ---- Initialise advanced modules ----
    if(InpAdaptiveEnabled)
-      AJ_Init(InpJournalFile);
+      AJ_Init(_Symbol, InpJournalFile);
 
    if(InpGuardianEnabled)
       GRD_Init(_Symbol, InpGRD_MinSample, InpGRD_File);
@@ -319,6 +319,10 @@ void OnTick()
    if(InpGuardianEnabled)
       GRD_UpdateOnTick(symbol);
 
+   // ---- Adaptive Journal: tick-level MAE/MFE — captures every intra-bar extreme ----
+   if(InpAdaptiveEnabled)
+      AJ_UpdateOnTick(symbol);
+
    // Only process full logic on a new bar (bar-close confirmed signals)
    if(!IsNewBar(symbol, g_ofTF)) return;
 
@@ -333,10 +337,10 @@ void OnTick()
       DBG(StringFormat("Bid=%.5f  Ask=%.5f  Spread=%.2f pips", bid, ask, spreadPips));
    }
 
-   // ---- Adaptive Journal: update MAE/MFE for open trades + detect closures ----
+   // ---- Adaptive Journal: increment bar counter + detect closed trades ----
    if(InpAdaptiveEnabled)
    {
-      AJ_UpdateActive(symbol);
+      AJ_IncrementBars(symbol);
       AJ_CheckClosedTrades(symbol);
    }
 
