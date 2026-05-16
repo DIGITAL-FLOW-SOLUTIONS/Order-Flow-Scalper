@@ -17,8 +17,7 @@
 #define GUARDIAN_MQH
 
 #define GRD_MAX_ACTIVE   10    // Max phantom pairs open simultaneously
-#define GRD_CONFIRM_N    2     // Consecutive same-direction wins to unlock trading
-#define GRD_HISTORY_SIZE 50    // Ring-buffer depth for today's results (info/CSV)
+#define GRD_HISTORY_SIZE 50    // Ring-buffer depth for today's completed pairs
 
 //--------------------------------------------------------------------
 //  A phantom pair: one NORMAL leg + one REVERSED leg, tracked live
@@ -116,7 +115,11 @@ void GRD_Init(string symbol, int minSamples = 2, string csvFile = "")
    g_grd.totalCompleted = 0;
    g_grd.canTrade       = false;   // gate is always ON — must earn permission daily
    g_grd.preferReversed = false;
-   g_grd.lastGMTDay     = -1;      // forces reset on very first tick
+   // Initialise to today's actual GMT day — GRD_Init already clears all state,
+   // so there's no need to fire GRD_DailyReset again on the very first tick.
+   MqlDateTime gmtNow;
+   TimeToStruct(TimeGMT(), gmtNow);
+   g_grd.lastGMTDay = gmtNow.day;
 
    if(!FileIsExist(g_grd_file))
       GRD_WriteHeader(g_grd_file);
@@ -168,27 +171,28 @@ int GRD_FreeSlot()
 }
 
 //--------------------------------------------------------------------
-//  Recompute decision outputs from the last GRD_CONFIRM_N results.
+//  Recompute decision outputs from the last InpGRD_MinSample results.
 //
-//  Looks at only the 2 most recently completed phantom pairs:
-//    Both NORMAL hit TP  →  canTrade=true,  preferReversed=false
-//    Both REVERSED hit TP →  canTrade=true,  preferReversed=true
-//    Anything else        →  canTrade=false  (wait for next pair)
+//  Checks the last g_grd_minSamp completed phantom pairs (default 2):
+//    All NORMAL hit TP   →  canTrade=true,  preferReversed=false
+//    All REVERSED hit TP →  canTrade=true,  preferReversed=true
+//    Anything else       →  canTrade=false  (wait for next pair)
 //--------------------------------------------------------------------
 void GRD_RecomputeStats()
 {
-   // Not enough data yet for this day
-   if(g_grd.totalCompleted < GRD_CONFIRM_N)
+   // Not enough phantom pairs completed today yet
+   // g_grd_minSamp is the runtime value of InpGRD_MinSample (default 2)
+   if(g_grd.totalCompleted < g_grd_minSamp)
    {
       g_grd.canTrade       = false;
       g_grd.preferReversed = false;
       return;
    }
 
-   // Read the last GRD_CONFIRM_N entries from the ring buffer (most recent first)
+   // Check that the last g_grd_minSamp completed pairs all agree on direction
    bool allNormal   = true;
    bool allReversed = true;
-   for(int k = 1; k <= GRD_CONFIRM_N; k++)
+   for(int k = 1; k <= g_grd_minSamp; k++)
    {
       int idx = (g_grd.windowHead - k + GRD_HISTORY_SIZE) % GRD_HISTORY_SIZE;
       if(!g_grd.normalWon[idx]) allNormal   = false;
@@ -434,7 +438,6 @@ void GRD_SpawnPhantoms(string symbol,
                        g_grd_phantoms[slot].revEntry,
                        g_grd_phantoms[slot].revSL,
                        g_grd_phantoms[slot].revTP,
-                       g_grd_phantoms[slot].id,
                        g_grd.totalCompleted));
 }
 
