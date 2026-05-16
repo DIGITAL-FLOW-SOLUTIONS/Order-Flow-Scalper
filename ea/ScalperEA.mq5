@@ -98,10 +98,8 @@ input string   InpJournalFile     = "ScalperEA_Journal.csv"; // Journal filename
 // Gates real trading when market shows no edge; advises direction.
 input group "=== Guardian ==="
 input bool     InpGuardianEnabled = true;         // Enable Guardian phantom system
-input int      InpGRD_Window      = 20;           // Rolling window (phantom pairs)
-input int      InpGRD_MinSample   = 5;            // Min pairs before gating real trades
-input double   InpGRD_EdgeThresh  = 0.10;         // Win-rate gap to prefer one side (0.10=10%)
-input string   InpGRD_File        = "ScalperEA_Guardian.csv"; // Guardian log filename
+input int      InpGRD_MinSample   = 2;            // Phantom pairs required before first real trade each day
+input string   InpGRD_File        = "";           // Guardian CSV filename (blank = auto per symbol)
 
 // === Live Trade Manager ===
 // Re-evaluates open trades each bar using live signal stack.
@@ -286,7 +284,7 @@ int OnInit()
       AJ_Init(InpJournalFile);
 
    if(InpGuardianEnabled)
-      GRD_Init(InpGRD_MinSample, InpGRD_EdgeThresh, InpGRD_File);
+      GRD_Init(_Symbol, InpGRD_MinSample, InpGRD_File);
 
    if(InpLTMEnabled)
       LTM_Init(InpLTM_MFEThresh, InpLTM_RetracePct, InpLTM_FlipConf);
@@ -563,16 +561,18 @@ void OnTick()
    if(InpGuardianEnabled)
       GRD_SpawnPhantoms(symbol, origDir, sig.entryPrice, sig.slDist, sig.tp1Dist);
 
-   // ---- Guardian: gate real trading if phantom data shows no edge ----
+   // ---- Guardian: gate real trading until last 2 phantom pairs confirm direction ----
    if(InpGuardianEnabled && !GRD_CanTrade())
    {
-      Print(StringFormat("Guardian: trading PAUSED | NormWR=%.0f%% RevWR=%.0f%% [%d samples] — waiting for edge",
-                          GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount()));
+      Print(StringFormat("Guardian [%s]: WAITING — %d phantom pair(s) today, "
+                         "need last %d to agree on direction before real trade",
+                         symbol, GRD_SampleCount(), 2));
       return;
    }
    if(InpGuardianEnabled && g_debugMode)
-      DBG(StringFormat("Guardian: NormWR=%.0f%% RevWR=%.0f%% [%d samples] | AutoRev=%s",
-                        GRD_NormalWinRate() * 100, GRD_RevWinRate() * 100, GRD_SampleCount(),
+      DBG(StringFormat("Guardian [%s]: CLEARED | today's pairs=%d | direction=%s | AutoRev=%s",
+                        symbol, GRD_SampleCount(),
+                        GRD_PreferReversed() ? "REVERSED" : "NORMAL",
                         GRD_PreferReversed() ? "YES" : "NO"));
 
    // ---- Signal confirmed — log and place trade ----
