@@ -31,7 +31,7 @@ struct EntrySignal
    double   tp2;             // Second take profit
    int      confluence;      // Number of confirming conditions
    string   reason;          // Human-readable log reason
-   // Signal conditions captured for Adaptive Journal + Guardian
+   // Signal conditions captured for Adaptive Journal + Reverser
    int      ofScore;         // Raw order flow score
    int      vpBias;          // Volume profile bias vote
    int      orbSig;          // ORB signal vote
@@ -39,8 +39,8 @@ struct EntrySignal
    int      exhaustion;      // Exhaustion level
    int      deltaDiv;        // Delta divergence
    double   atr;             // ATR at time of signal
-   double   slDist;          // SL distance in price (for Guardian spawn)
-   double   tp1Dist;         // TP1 distance in price (for Guardian spawn)
+   double   slDist;          // SL distance in price
+   double   tp1Dist;         // TP1 distance in price
 };
 
 //--------------------------------------------------------------------
@@ -288,7 +288,7 @@ EntrySignal EvaluateEntry(string symbol, ENUM_TIMEFRAMES tf,
                         sig.entryPrice, sig.stopLoss, slDist, slSource,
                         sig.tp1, sig.tp2, sig.reason));
 
-   // ---- Populate signal snapshot fields for Adaptive Journal & Guardian ----
+   // ---- Populate signal snapshot fields for Adaptive Journal & Reverser ----
    sig.ofScore    = ofScore;
    sig.vpBias     = vpBias;
    sig.orbSig     = orbSignal;

@@ -604,7 +604,7 @@ double AJ_GetDynamicSpreadLimit(double baseLimit, int lookback = AJ_CACHE_SIZE)
 
 //--------------------------------------------------------------------
 //  Count of consecutive ReversalWouldWin flags at the end of the cache.
-//  3+ consecutive = possible regime shift advisory to Guardian.
+//  3+ consecutive = possible regime shift advisory.
 //--------------------------------------------------------------------
 int AJ_GetReversalStreak()
 {

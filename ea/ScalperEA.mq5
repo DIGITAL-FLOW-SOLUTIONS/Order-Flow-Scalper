@@ -27,7 +27,6 @@
 #include "Include/ScalperEA/RiskManager.mqh"
 #include "Include/ScalperEA/TradeManager.mqh"
 #include "Include/ScalperEA/AdaptiveJournal.mqh"
-#include "Include/ScalperEA/Guardian.mqh"
 #include "Include/ScalperEA/LiveTradeManager.mqh"
 
 //====================================================================
@@ -80,11 +79,10 @@ input double   InpSpreadUSDJPY    = 2.0;         // USDJPY max spread override
 
 // === REVERSER ===
 // Flips the trade direction while preserving identical SL/TP distances (same R:R).
-// Manual override (InpReverser=true) always reverses.
-// Auto-reverse lets Guardian decide based on live phantom trade results.
+// Set to true to trade the opposite direction of all signals.
+// Default is false (normal trading). When true, all entries are reversed with SL/TP recalculated.
 input group "=== REVERSER ==="
-input bool     InpReverser        = false;        // Always reverse signals (manual)
-input bool     InpAutoReverse     = true;         // Auto-reverse when Guardian recommends it
+input bool     InpReverser        = false;        // Reverse all signals (true = trade opposite direction)
 
 // === Adaptive Journal ===
 // Records every trade to CSV with full signal conditions, MAE, MFE.
@@ -102,15 +100,6 @@ input bool     InpAJAdaptFilter = true;  // Raise confluence/spread bar when win
 input bool     InpAJAdaptLTM   = true;  // Exit early when trade matches loser profile
 input int      InpAJLookback    = 20;   // Rolling window: trades to analyse for stats
 input int      InpAJMinSamples  = 10;   // Min trades before adaptive logic activates
-
-// === Guardian — Phantom Trade Layer ===
-// Spawns imaginary NORMAL + REVERSED trade pairs on each signal.
-// Monitors which side hits TP vs SL to determine real-time edge.
-// Gates real trading when market shows no edge; advises direction.
-input group "=== Guardian ==="
-input bool     InpGuardianEnabled = true;         // Enable Guardian phantom system
-input int      InpGRD_MinSample   = 2;            // Phantom pairs required before first real trade each day
-input string   InpGRD_File        = "";           // Guardian CSV filename (blank = auto per symbol)
 
 // === Live Trade Manager ===
 // Re-evaluates open trades each bar using live signal stack.
@@ -294,9 +283,6 @@ int OnInit()
    if(InpAdaptiveEnabled)
       AJ_Init(_Symbol, InpJournalFile);
 
-   if(InpGuardianEnabled)
-      GRD_Init(_Symbol, InpGRD_MinSample, InpGRD_File);
-
    if(InpLTMEnabled)
       LTM_Init(InpLTM_MFEThresh, InpLTM_RetracePct, InpLTM_FlipConf);
 
@@ -304,8 +290,7 @@ int OnInit()
          " | OF TF: ", EnumToString(g_ofTF),
          " | VP TF: ", EnumToString(g_vpTF),
          " | Debug: ", g_debugMode ? "ON" : "OFF",
-         " | Reverser: ", InpReverser ? "MANUAL" : (InpAutoReverse ? "AUTO" : "OFF"),
-         " | Guardian: ", InpGuardianEnabled ? "ON" : "OFF",
+         " | Reverser: ", InpReverser ? "ON (trading REVERSED)" : "OFF (trading NORMAL)",
          " | LTM: ", InpLTMEnabled ? "ON" : "OFF",
          " | Journal: ", InpAdaptiveEnabled ? "ON" : "OFF");
    return INIT_SUCCEEDED;
@@ -325,10 +310,6 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    string symbol = Symbol();
-
-   // ---- Guardian: 24/7 tick-level phantom monitoring (runs before bar gate) ----
-   if(InpGuardianEnabled)
-      GRD_UpdateOnTick(symbol);
 
    // ---- Adaptive Journal: tick-level MAE/MFE — captures every intra-bar extreme ----
    if(InpAdaptiveEnabled)
@@ -567,12 +548,11 @@ void OnTick()
       return;
    }
 
-   // ---- REVERSER: flip signal while preserving identical R:R ratios ----
-   // origDir is the natural signal direction — saved BEFORE any flip.
-   // Guardian phantom spawning always uses origDir so its data is unbiased.
+   // ---- REVERSER: flip signal direction (user-controlled via InpReverser input) ----
+   // When InpReverser=true, every BUY signal becomes a SELL and vice versa.
+   // SL and TP are fully recalculated for the flipped direction at the same distances.
    int  origDir       = sig.direction;
-   bool applyReverser = InpReverser ||
-                        (InpAutoReverse && InpGuardianEnabled && GRD_PreferReversed());
+   bool applyReverser = InpReverser;
 
    if(applyReverser)
    {
@@ -596,11 +576,10 @@ void OnTick()
          sig.tp2        = NormalizeDouble(sig.entryPrice - tp2Dist,     digits);
       }
       sig.reason += "REVERSED ";
-      Print(StringFormat("REVERSER: %s → %s | SL_dist=%.5f TP1_dist=%.5f [%s]",
+      Print(StringFormat("REVERSER ON: signal %s → trading %s | SL_dist=%.5f TP1_dist=%.5f TP2_dist=%.5f",
                           origDir > 0 ? "LONG" : "SHORT",
                           sig.direction > 0 ? "LONG" : "SHORT",
-                          sig.slDist, sig.tp1Dist,
-                          InpReverser ? "manual" : "Guardian-auto"));
+                          sig.slDist, sig.tp1Dist, tp2Dist));
    }
 
    // ---- Adaptive Intelligence: scale SL/TP from journal performance stats ----
@@ -646,41 +625,17 @@ void OnTick()
                           tpMult, sig.stopLoss, sig.tp1));
    }
 
-   // ---- Guardian: spawn phantom on EVERY valid signal (before real-trade gate) ----
-   // This is critical: phantoms must accumulate even when real trading is blocked,
-   // otherwise Guardian can never collect the data needed to unblock itself.
-   if(InpGuardianEnabled)
-      GRD_SpawnPhantoms(symbol, origDir, sig.entryPrice, sig.slDist, sig.tp1Dist);
-
-   // ---- Guardian: gate real trading until last 2 phantom pairs confirm direction ----
-   if(InpGuardianEnabled && !GRD_CanTrade())
-   {
-      Print(StringFormat("Guardian [%s]: WAITING — %d phantom pair(s) today, "
-                         "need last %d to agree on direction before real trade",
-                         symbol, GRD_SampleCount(), InpGRD_MinSample));
-      return;
-   }
-   if(InpGuardianEnabled && g_debugMode)
-      DBG(StringFormat("Guardian [%s]: CLEARED | today's pairs=%d | direction=%s | AutoRev=%s",
-                        symbol, GRD_SampleCount(),
-                        GRD_PreferReversed() ? "REVERSED" : "NORMAL",
-                        GRD_PreferReversed() ? "YES" : "NO"));
-
    // ---- Adaptive Intelligence: reversal streak advisory ----
    // 3+ consecutive ReversalWouldWin flags in the journal suggests the EA has
-   // been firing in the wrong direction repeatedly. This is an early-warning
-   // advisory — Guardian's phantom layer handles the actual gate, but this log
-   // provides a human-readable alert that a regime shift may be in progress.
+   // been firing in the wrong direction repeatedly. Advisory log only.
    if(InpAdaptiveEnabled && AJ_HasStats(InpAJMinSamples))
    {
       int streak = AJ_GetReversalStreak();
       if(streak >= 3)
          Print(StringFormat("AJ Advisory [%s]: %d consecutive ReversalWouldWin — "
-                            "possible regime shift | Guardian: %s | AutoReverse: %s",
+                            "possible regime shift | Reverser: %s",
                              symbol, streak,
-                             (InpGuardianEnabled && GRD_CanTrade()) ? "CLEARED" :
-                             InpGuardianEnabled                     ? "GATING"  : "OFF",
-                             (InpAutoReverse && GRD_PreferReversed()) ? "ACTIVE" : "inactive"));
+                             InpReverser ? "ON (already reversed)" : "OFF"));
    }
 
    // ---- Signal confirmed — log and place trade ----
