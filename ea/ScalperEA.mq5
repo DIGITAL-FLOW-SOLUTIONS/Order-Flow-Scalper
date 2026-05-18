@@ -539,13 +539,17 @@ void OnTick()
    if(sig.direction != 0 && InpAdaptiveEnabled && InpAJAdaptFilter
       && AJ_HasStats(InpAJMinSamples))
    {
-      double dynMaxSprd = AJ_GetDynamicSpreadLimit(InpSpreadMaxPips, InpAJLookback);
+      // Use the symbol-appropriate spread ceiling so XAUUSD/USDJPY are not mis-gated
+      double symSpreadBase = (symbol == "XAUUSD") ? InpSpreadXAUUSD :
+                             (symbol == "USDJPY") ? InpSpreadUSDJPY :
+                             InpSpreadMaxPips;
+      double dynMaxSprd = AJ_GetDynamicSpreadLimit(symSpreadBase, InpAJLookback);
       double curSpread  = GetSpreadPips(symbol);
       if(curSpread > dynMaxSprd)
       {
          DBG(StringFormat("AJ Filter: spread %.2f pips > dynamic limit %.2f pips "
-                          "(win rate low) → skip",
-                           curSpread, dynMaxSprd));
+                          "(base=%.2f, win rate low) → skip",
+                           curSpread, dynMaxSprd, symSpreadBase));
          sig.direction = 0;
       }
    }
@@ -610,13 +614,13 @@ void OnTick()
       MqlDateTime dtAdj;
       TimeToStruct(TimeGMT(), dtAdj);
 
-      double slMult   = AJ_GetSuggestedSLMult(InpAJLookback);
+      double slBase   = AJ_GetSuggestedSLMult(InpAJLookback);   // raw MAE-based mult (saved before combining)
       double tpMult   = AJ_GetSuggestedTPMult(InpAJLookback);
       double hourMult = AJ_GetHourSLMult(dtAdj.hour, InpAJLookback);
 
       // Combine base SL multiplier with hour-of-day adjustment; hard-clamp result
-      slMult = MathMax(0.75, MathMin(1.50, slMult * hourMult));
-      tpMult = MathMax(0.70, MathMin(1.30, tpMult));
+      double slMult   = MathMax(0.75, MathMin(1.50, slBase * hourMult));
+      tpMult          = MathMax(0.70, MathMin(1.30, tpMult));
 
       double tp2Dist  = MathAbs(sig.tp2 - sig.entryPrice);   // TP2 distance preserved
       sig.slDist  *= slMult;
@@ -638,7 +642,7 @@ void OnTick()
       Print(StringFormat("AJ Adaptive [%s]: SL×%.2f (base×%.2f, hour[%02d]×%.2f) | "
                          "TP×%.2f | SL=%.5f TP1=%.5f",
                           symbol, slMult,
-                          AJ_GetSuggestedSLMult(InpAJLookback), dtAdj.hour, hourMult,
+                          slBase, dtAdj.hour, hourMult,
                           tpMult, sig.stopLoss, sig.tp1));
    }
 

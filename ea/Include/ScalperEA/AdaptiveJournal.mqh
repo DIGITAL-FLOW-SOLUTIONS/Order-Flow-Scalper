@@ -448,6 +448,22 @@ double AJ_GetWinnerAvgMFE_R(int lookback = AJ_CACHE_SIZE)
 }
 
 //--------------------------------------------------------------------
+//  Count of losing trades in the last N closed — minimum sample check
+//  for AJ_ShouldExitEarly before computing averages.
+//--------------------------------------------------------------------
+int AJ_GetLoserCount(int lookback = AJ_CACHE_SIZE)
+{
+   int n = MathMin(g_aj_cache.count, MathMin(lookback, AJ_CACHE_SIZE));
+   int cnt = 0;
+   for(int k = 1; k <= n; k++)
+   {
+      int idx = (g_aj_cache.head - k + AJ_CACHE_SIZE) % AJ_CACHE_SIZE;
+      if(!g_aj_cache.won[idx]) cnt++;
+   }
+   return cnt;
+}
+
+//--------------------------------------------------------------------
 //  Average MFE_R of losing trades — how far losers move before failing.
 //  Used by LTM to identify the harvest opportunity zone.
 //--------------------------------------------------------------------
@@ -613,30 +629,15 @@ int AJ_GetReversalStreak()
 //    • Trade is in some profit (curMFER > 0.20) — never close a loser
 //    • At least 3 losing trades are in the cache for the comparison
 //
-//  When this fires, LTM can exit at the current small gain rather
-//  than let the market complete the same familiar losing pattern.
+//  Uses AJ_GetLoserCount / AJ_GetLoserAvgMFE_R / AJ_GetLoserAvgBars
+//  so the computation lives in one place and can be read externally.
 //--------------------------------------------------------------------
 bool AJ_ShouldExitEarly(double curMFER, int barsInTrade, int lookback = AJ_CACHE_SIZE)
 {
-   int n = MathMin(g_aj_cache.count, MathMin(lookback, AJ_CACHE_SIZE));
-   double loserMFESum = 0, loserBarsSum = 0;
-   int    loserCount  = 0;
+   if(AJ_GetLoserCount(lookback) < 3) return false;   // not enough losing trade history
 
-   for(int k = 1; k <= n; k++)
-   {
-      int idx = (g_aj_cache.head - k + AJ_CACHE_SIZE) % AJ_CACHE_SIZE;
-      if(!g_aj_cache.won[idx])
-      {
-         loserMFESum  += g_aj_cache.mfeR[idx];
-         loserBarsSum += g_aj_cache.barsOpen[idx];
-         loserCount++;
-      }
-   }
-
-   if(loserCount < 3) return false;   // not enough losing trade history
-
-   double avgLoserMFE  = loserMFESum  / loserCount;
-   double avgLoserBars = loserBarsSum / loserCount;
+   double avgLoserMFE  = AJ_GetLoserAvgMFE_R(lookback);
+   double avgLoserBars = AJ_GetLoserAvgBars(lookback);
 
    bool inLoserMFEZone = (curMFER >= avgLoserMFE * 0.70 &&
                           curMFER <= avgLoserMFE * 1.30);

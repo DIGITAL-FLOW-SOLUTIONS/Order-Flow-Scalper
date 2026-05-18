@@ -314,10 +314,10 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
       }
       else if(g_debugMode)
       {
-         DBG(StringFormat("LTM: #%I64u %s | MFE=%.5f (%.0f%% TP1) | "
+         // monitoringActive is always true here (false branch was continue'd above)
+         DBG(StringFormat("LTM: #%I64u MONITORED | MFE=%.5f (%.0f%% TP1) | "
                            "excursion=%.5f | signal=%+d conf=%d | bars=%d | HOLD",
                             g_ltm_trades[i].ticket,
-                            g_ltm_trades[i].monitoringActive ? "MONITORED" : "watching",
                             g_ltm_trades[i].mfe,
                             g_ltm_trades[i].tp1Dist > 0
                                ? g_ltm_trades[i].mfe / g_ltm_trades[i].tp1Dist * 100 : 0,
