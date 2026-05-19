@@ -39,11 +39,12 @@ input ulong    InpMagic           = 20240101;   // Magic number
 input string   InpComment         = "ScalperEA";// Order comment
 input bool     InpDebug           = false;       // Enable verbose debug logging
 
-// --- Trading Session (GMT) ---
-input group "=== Session (GMT Hours) ==="
-input int      InpNYOpenHour      = 13;          // NY Session open hour (GMT) — 13 = 9 AM EST
-input int      InpNYCloseHour     = 21;          // NY Session close hour (GMT) — 21 = 5 PM EST
-input int      InpLondonOpenHour  =  8;          // London open hour (GMT)
+// --- Trading Session (UTC) ---
+input group "=== Session (UTC Hours) ==="
+input int      InpNYOpenHour      = 13;          // NY open hour UTC — EDT base (summer: 13=9AM, winter auto→14=9AM)
+input int      InpNYCloseHour     = 21;          // NY close hour UTC — EDT base (summer: 21=5PM, winter auto→22=5PM)
+input bool     InpDSTAutoAdjust   = true;        // Auto-shift session +1h in winter (US EST). Disable to use inputs as-is.
+input int      InpLondonOpenHour  =  8;          // London open hour (UTC)
 input int      InpORBMinutes      = 30;          // Opening Range duration (minutes)
 input bool     InpTradeNYOnly     = true;        // Trade NY session only
 
@@ -181,14 +182,71 @@ ENUM_TIMEFRAMES MinutesToTF(int mins)
 }
 
 //====================================================================
-//  HELPER: Is current GMT hour within trading session?
+//  HELPER: Is US Eastern Daylight Saving Time active at a given UTC time?
+//
+//  US DST rules (fixed every year):
+//    Spring forward: 2nd Sunday of March  at 02:00 EST = 07:00 UTC
+//    Fall back:      1st Sunday of November at 02:00 EDT = 06:00 UTC
+//
+//  Returns true  → EDT active (UTC-4, summer)  → NY opens at 13:00 UTC
+//  Returns false → EST active (UTC-5, winter)  → NY opens at 14:00 UTC
+//====================================================================
+bool IsUSDaylightSaving(datetime utcTime)
+{
+   MqlDateTime dt;
+   TimeToStruct(utcTime, dt);
+   int year = dt.year;
+
+   // ---- Second Sunday of March at 07:00 UTC (spring-forward moment) ----
+   MqlDateTime m1; ZeroMemory(m1);
+   m1.year = year; m1.mon = 3; m1.day = 1;
+   datetime march1 = StructToTime(m1);
+   MqlDateTime m1dt; TimeToStruct(march1, m1dt);
+   // days until first Sunday from March 1 (0 if March 1 IS Sunday)
+   int toFirstSunMar = (7 - m1dt.day_of_week) % 7;
+   datetime dstStart = march1 + (datetime)((toFirstSunMar + 7) * 86400 + 7 * 3600);
+
+   // ---- First Sunday of November at 06:00 UTC (fall-back moment) ----
+   MqlDateTime n1; ZeroMemory(n1);
+   n1.year = year; n1.mon = 11; n1.day = 1;
+   datetime nov1 = StructToTime(n1);
+   MqlDateTime n1dt; TimeToStruct(nov1, n1dt);
+   int toFirstSunNov = (7 - n1dt.day_of_week) % 7;
+   datetime dstEnd = nov1 + (datetime)(toFirstSunNov * 86400 + 6 * 3600);
+
+   return (utcTime >= dstStart && utcTime < dstEnd);
+}
+
+//====================================================================
+//  HELPER: Effective NY open/close hours in UTC, auto-adjusted for DST.
+//
+//  User sets InpNYOpenHour/InpNYCloseHour as EDT (summer) base values.
+//  When InpDSTAutoAdjust=true and EST is in effect, both hours shift +1
+//  so the EA always tracks 9 AM – 5 PM New York regardless of the season.
+//====================================================================
+int GetEffectiveNYOpenHour()
+{
+   if(!InpDSTAutoAdjust) return InpNYOpenHour;
+   return IsUSDaylightSaving(TimeGMT()) ? InpNYOpenHour : InpNYOpenHour + 1;
+}
+int GetEffectiveNYCloseHour()
+{
+   if(!InpDSTAutoAdjust) return InpNYCloseHour;
+   return IsUSDaylightSaving(TimeGMT()) ? InpNYCloseHour : InpNYCloseHour + 1;
+}
+
+//====================================================================
+//  HELPER: Is current UTC time within the NY trading session?
+//  Always uses TimeGMT() — completely independent of broker server time.
 //====================================================================
 bool IsInSession()
 {
    if(!InpTradeNYOnly) return true;
    MqlDateTime dt;
-   TimeToStruct(TimeGMT(), dt);   // Always GMT — broker-timezone independent
-   return (dt.hour >= InpNYOpenHour && dt.hour < InpNYCloseHour);
+   TimeToStruct(TimeGMT(), dt);   // Always UTC — broker-timezone independent
+   int openHour  = GetEffectiveNYOpenHour();
+   int closeHour = GetEffectiveNYCloseHour();
+   return (dt.hour >= openHour && dt.hour < closeHour);
 }
 
 //====================================================================
@@ -236,8 +294,8 @@ void RebuildVolumeProfile(string symbol)
 {
    if(!InpVPEnabled) return;
 
-   // Find start of current NY session
-   int sessionStartBar = FindSessionStartBar(symbol, g_vpTF, InpNYOpenHour);
+   // Find start of current NY session (uses DST-adjusted UTC hour)
+   int sessionStartBar = FindSessionStartBar(symbol, g_vpTF, GetEffectiveNYOpenHour());
    if(sessionStartBar < 0)
    {
       // Try London session as fallback
@@ -255,13 +313,23 @@ int OnInit()
 {
    g_debugMode = InpDebug;   // propagate to all .mqh modules (same compilation unit)
 
-   // Log broker GMT offset so user can verify time independence on startup
+   // Log UTC reference and broker offset so user can verify time independence on startup
+   // All session logic uses TimeGMT() (true UTC) — never TimeCurrent() (broker server time).
    int brokerOffsetHours = (int)MathRound((TimeCurrent() - TimeGMT()) / 3600.0);
-   Print(StringFormat("ScalperEA: Time reference = GMT (TimeGMT) | Broker server offset = %+d h | "
-                      "Broker time: %s | GMT: %s",
+   bool isDST  = IsUSDaylightSaving(TimeGMT());
+   int  effOpen  = GetEffectiveNYOpenHour();
+   int  effClose = GetEffectiveNYCloseHour();
+   Print(StringFormat("ScalperEA: Time reference = UTC (TimeGMT) | Broker offset = %+d h | "
+                      "UTC: %s | Broker: %s",
                       brokerOffsetHours,
-                      TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
-                      TimeToString(TimeGMT(),     TIME_DATE|TIME_MINUTES)));
+                      TimeToString(TimeGMT(),     TIME_DATE|TIME_MINUTES),
+                      TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES)));
+   Print(StringFormat("ScalperEA: US DST = %s (%s) | NY session UTC = %02d:00 – %02d:00 | "
+                      "DSTAutoAdjust = %s",
+                      isDST ? "EDT (UTC-4, summer)" : "EST (UTC-5, winter)",
+                      isDST ? "clocks are FORWARD" : "clocks are BACK",
+                      effOpen, effClose,
+                      InpDSTAutoAdjust ? "ON" : "OFF (using raw inputs)"));
 
    g_ofTF = MinutesToTF(InpOFTF_Minutes);
    g_vpTF = MinutesToTF(InpVPTF_Minutes);
@@ -380,9 +448,11 @@ void OnTick()
       if(g_debugMode)
       {
          MqlDateTime dtNow; TimeToStruct(TimeGMT(), dtNow);
-         DBG(StringFormat("Session: %s (GMT hour=%d, window=%d-%d)",
+         DBG(StringFormat("Session: %s (UTC hour=%d, window=%02d:00-%02d:00 [%s])",
                            inSession ? "IN SESSION ✓" : "OUT OF SESSION — skipping bar",
-                           dtNow.hour, InpNYOpenHour, InpNYCloseHour));
+                           dtNow.hour,
+                           GetEffectiveNYOpenHour(), GetEffectiveNYCloseHour(),
+                           IsUSDaylightSaving(TimeGMT()) ? "EDT/summer" : "EST/winter"));
       }
       if(!inSession) return;
    }
@@ -416,7 +486,7 @@ void OnTick()
    // ---- Update ORB ----
    if(InpORBEnabled)
    {
-      UpdateOpeningRange(g_orb, symbol, g_ofTF, InpNYOpenHour, InpORBMinutes);
+      UpdateOpeningRange(g_orb, symbol, g_ofTF, GetEffectiveNYOpenHour(), InpORBMinutes);
       if(g_orb.isFormed)
          CheckORBBreakout(g_orb, symbol, g_ofTF);
    }
