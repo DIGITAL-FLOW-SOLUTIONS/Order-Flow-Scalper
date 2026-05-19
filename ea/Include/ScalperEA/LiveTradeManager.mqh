@@ -9,6 +9,18 @@
 //|  Rule 2: Signal flips against trade → exit while in profit.    |
 //|  Rule 3: AJ pattern — trade matches loser profile from journal  |
 //|           stats → exit at small gain before familiar loss.      |
+//|                                                                  |
+//|  STREAK MODE (Feature 1):                                       |
+//|  When a pair produces consecutive winning trades, the position  |
+//|  cap is raised to InpLTM_StreakMaxPos for 1 hour. Deactivates  |
+//|  immediately on any loss, or after the 1-hour window expires.  |
+//|                                                                  |
+//|  LOSS SUSPENSION (Feature 2):                                   |
+//|  Escalating cooldown after consecutive losses on a pair:        |
+//|    1st loss → 30 min suspension                                 |
+//|    2nd loss → 60 min suspension                                 |
+//|    3rd loss → suspended for the rest of the trading day         |
+//|  Resets at midnight UTC each day.                               |
 //+------------------------------------------------------------------+
 #ifndef LIVETRADEMANAGER_MQH
 #define LIVETRADEMANAGER_MQH
@@ -37,29 +49,253 @@ struct LTM_TradeState
    bool     active;
 };
 
-LTM_TradeState g_ltm_trades[LTM_MAX_TRADES];
+//--------------------------------------------------------------------
+//  Per-symbol streak mode state  (Feature 1)
+//--------------------------------------------------------------------
+struct LTM_StreakState
+{
+   string   symbol;
+   int      wins;              // consecutive winning closed trades on this symbol
+   bool     active;            // streak mode currently on
+   datetime startTime;         // UTC time streak mode was activated
+   bool     used;              // slot is in use
+};
+
+//--------------------------------------------------------------------
+//  Per-symbol loss suspension state  (Feature 2)
+//--------------------------------------------------------------------
+struct LTM_SuspendState
+{
+   string   symbol;
+   int      lossCount;         // consecutive losses today (resets at midnight)
+   datetime resumeTime;        // UTC time trading resumes (0 = not suspended)
+   bool     dayBanned;         // banned for the rest of today
+   int      lastGMTDay;        // day of last reset
+   bool     used;
+};
+
+#define LTM_MAX_SYMBOLS  10    // max symbols tracked simultaneously
+
+LTM_TradeState  g_ltm_trades[LTM_MAX_TRADES];
+LTM_StreakState g_ltm_streak[LTM_MAX_SYMBOLS];
+LTM_SuspendState g_ltm_suspend[LTM_MAX_SYMBOLS];
+
 bool           g_ltm_ready       = false;
 double         g_ltm_mfeThresh   = 0.50;
 double         g_ltm_retracePct  = 0.80;
 int            g_ltm_flipConf    = 2;
+int            g_ltm_streakMin   = 2;    // wins needed to activate streak mode
+int            g_ltm_streakMax   = 5;    // max positions while in streak mode
+int            g_ltm_streakCap   = 10;   // absolute upper cap (user input)
+int            g_ltm_streakMins  = 60;   // streak window duration (minutes)
 
 //--------------------------------------------------------------------
 //  Initialise — call in OnInit()
 //--------------------------------------------------------------------
-void LTM_Init(double mfeThreshold = 0.50,
-              double retracePct   = 0.80,
-              int    flipConf     = 2)
+void LTM_Init(double mfeThreshold  = 0.50,
+              double retracePct    = 0.80,
+              int    flipConf      = 2,
+              int    streakMin     = 2,
+              int    streakMaxPos  = 5,
+              int    streakCapPos  = 10,
+              int    streakMins    = 60)
 {
    g_ltm_mfeThresh  = mfeThreshold;
    g_ltm_retracePct = retracePct;
    g_ltm_flipConf   = flipConf;
+   g_ltm_streakMin  = streakMin;
+   g_ltm_streakMax  = MathMin(streakMaxPos, streakCapPos);
+   g_ltm_streakCap  = streakCapPos;
+   g_ltm_streakMins = streakMins;
 
-   for(int i = 0; i < LTM_MAX_TRADES; i++)
-      g_ltm_trades[i].active = false;
+   for(int i = 0; i < LTM_MAX_TRADES;   i++) g_ltm_trades[i].active  = false;
+   for(int i = 0; i < LTM_MAX_SYMBOLS;  i++) { g_ltm_streak[i].used  = false; g_ltm_suspend[i].used = false; }
 
    g_ltm_ready = true;
-   Print(StringFormat("LiveTradeManager: ready | MFEthresh=%.0f%% RetracePct=%.0f%% FlipConf=%d",
-                       mfeThreshold * 100, retracePct * 100, flipConf));
+   Print(StringFormat("LiveTradeManager: ready | MFEthresh=%.0f%% RetracePct=%.0f%% FlipConf=%d "
+                      "| StreakMode: min=%d wins, max=%d pos, window=%d min "
+                      "| LossSuspend: 1L=30m 2L=60m 3L=dayban",
+                      mfeThreshold * 100, retracePct * 100, flipConf,
+                      streakMin, streakMaxPos, streakMins));
+}
+
+//--------------------------------------------------------------------
+//  Internal: find or create a streak slot for a symbol
+//--------------------------------------------------------------------
+int LTM_StreakSlot(string symbol)
+{
+   for(int i = 0; i < LTM_MAX_SYMBOLS; i++)
+      if(g_ltm_streak[i].used && g_ltm_streak[i].symbol == symbol) return i;
+   for(int i = 0; i < LTM_MAX_SYMBOLS; i++)
+      if(!g_ltm_streak[i].used)
+      {
+         g_ltm_streak[i].symbol    = symbol;
+         g_ltm_streak[i].wins      = 0;
+         g_ltm_streak[i].active    = false;
+         g_ltm_streak[i].startTime = 0;
+         g_ltm_streak[i].used      = true;
+         return i;
+      }
+   return -1;
+}
+
+//--------------------------------------------------------------------
+//  Internal: find or create a suspend slot for a symbol
+//--------------------------------------------------------------------
+int LTM_SuspendSlot(string symbol)
+{
+   for(int i = 0; i < LTM_MAX_SYMBOLS; i++)
+      if(g_ltm_suspend[i].used && g_ltm_suspend[i].symbol == symbol) return i;
+   for(int i = 0; i < LTM_MAX_SYMBOLS; i++)
+      if(!g_ltm_suspend[i].used)
+      {
+         MqlDateTime gmt; TimeToStruct(TimeGMT(), gmt);
+         g_ltm_suspend[i].symbol      = symbol;
+         g_ltm_suspend[i].lossCount   = 0;
+         g_ltm_suspend[i].resumeTime  = 0;
+         g_ltm_suspend[i].dayBanned   = false;
+         g_ltm_suspend[i].lastGMTDay  = gmt.day;
+         g_ltm_suspend[i].used        = true;
+         return i;
+      }
+   return -1;
+}
+
+//--------------------------------------------------------------------
+//  Feature 2: Midnight reset for loss counters
+//--------------------------------------------------------------------
+void LTM_CheckDailyReset(string symbol)
+{
+   int idx = LTM_SuspendSlot(symbol);
+   if(idx < 0) return;
+   MqlDateTime gmt; TimeToStruct(TimeGMT(), gmt);
+   if(gmt.day != g_ltm_suspend[idx].lastGMTDay)
+   {
+      bool wasBanned = g_ltm_suspend[idx].dayBanned;
+      g_ltm_suspend[idx].lossCount  = 0;
+      g_ltm_suspend[idx].resumeTime = 0;
+      g_ltm_suspend[idx].dayBanned  = false;
+      g_ltm_suspend[idx].lastGMTDay = gmt.day;
+      if(wasBanned)
+         Print(StringFormat("LossSuspend [%s]: new trading day — daily ban lifted, loss counter reset", symbol));
+   }
+}
+
+//--------------------------------------------------------------------
+//  Feature 2: Public query — is trading suspended for this symbol?
+//  Call this from the main EA before placing any new entry.
+//--------------------------------------------------------------------
+bool LTM_IsSuspended(string symbol)
+{
+   LTM_CheckDailyReset(symbol);
+   int idx = LTM_SuspendSlot(symbol);
+   if(idx < 0) return false;
+   if(g_ltm_suspend[idx].dayBanned) return true;
+   if(g_ltm_suspend[idx].resumeTime > 0 && TimeGMT() < g_ltm_suspend[idx].resumeTime) return true;
+   return false;
+}
+
+//--------------------------------------------------------------------
+//  Feature 2: Called when a trade closes at a loss on this symbol.
+//  Escalates suspension: 1st=30m, 2nd=60m, 3rd=day ban.
+//--------------------------------------------------------------------
+void LTM_RecordLoss(string symbol)
+{
+   LTM_CheckDailyReset(symbol);
+   int idx = LTM_SuspendSlot(symbol);
+   if(idx < 0) return;
+
+   g_ltm_suspend[idx].lossCount++;
+   int n = g_ltm_suspend[idx].lossCount;
+
+   if(n == 1)
+   {
+      g_ltm_suspend[idx].resumeTime = TimeGMT() + 30 * 60;
+      Print(StringFormat("LossSuspend [%s]: loss #1 — suspended 30 min, resumes %s UTC",
+                          symbol, TimeToString(g_ltm_suspend[idx].resumeTime, TIME_DATE|TIME_MINUTES)));
+   }
+   else if(n == 2)
+   {
+      g_ltm_suspend[idx].resumeTime = TimeGMT() + 60 * 60;
+      Print(StringFormat("LossSuspend [%s]: loss #2 — suspended 60 min, resumes %s UTC",
+                          symbol, TimeToString(g_ltm_suspend[idx].resumeTime, TIME_DATE|TIME_MINUTES)));
+   }
+   else
+   {
+      g_ltm_suspend[idx].dayBanned  = true;
+      g_ltm_suspend[idx].resumeTime = 0;
+      Print(StringFormat("LossSuspend [%s]: loss #%d — SUSPENDED for rest of trading day (resets midnight UTC)",
+                          symbol, n));
+   }
+
+   // A loss also cancels any active streak mode on this symbol
+   int si = LTM_StreakSlot(symbol);
+   if(si >= 0 && g_ltm_streak[si].active)
+   {
+      g_ltm_streak[si].active = false;
+      g_ltm_streak[si].wins   = 0;
+      Print(StringFormat("StreakMode [%s]: deactivated — loss recorded", symbol));
+   }
+}
+
+//--------------------------------------------------------------------
+//  Feature 1: Called when a trade closes at a profit on this symbol.
+//  Increments win streak; activates streak mode when threshold met.
+//--------------------------------------------------------------------
+void LTM_RecordWin(string symbol)
+{
+   int idx = LTM_StreakSlot(symbol);
+   if(idx < 0) return;
+
+   g_ltm_streak[idx].wins++;
+   int w = g_ltm_streak[idx].wins;
+
+   if(!g_ltm_streak[idx].active && w >= g_ltm_streakMin)
+   {
+      g_ltm_streak[idx].active    = true;
+      g_ltm_streak[idx].startTime = TimeGMT();
+      Print(StringFormat("StreakMode [%s]: ACTIVATED after %d consecutive wins — "
+                         "position cap raised to %d | window = %d min (expires %s UTC)",
+                          symbol, w, g_ltm_streakMax, g_ltm_streakMins,
+                          TimeToString(g_ltm_streak[idx].startTime + g_ltm_streakMins * 60,
+                                       TIME_DATE|TIME_MINUTES)));
+   }
+   else if(g_ltm_streak[idx].active)
+   {
+      DBG(StringFormat("StreakMode [%s]: win #%d recorded — streak mode remains active", symbol, w));
+   }
+
+   // A win clears any timed suspension (dayban stays — that requires a new day)
+   int si = LTM_SuspendSlot(symbol);
+   if(si >= 0 && !g_ltm_suspend[si].dayBanned && g_ltm_suspend[si].resumeTime > 0)
+   {
+      g_ltm_suspend[si].resumeTime = 0;
+      g_ltm_suspend[si].lossCount  = 0;
+      DBG(StringFormat("LossSuspend [%s]: suspension cleared by winning trade", symbol));
+   }
+}
+
+//--------------------------------------------------------------------
+//  Feature 1: Public query — effective max positions for this symbol.
+//  Returns the streak-mode cap if active and window not expired,
+//  otherwise returns the normal InpMaxPositions cap passed in.
+//--------------------------------------------------------------------
+int LTM_GetMaxPositions(string symbol, int normalMax)
+{
+   int idx = LTM_StreakSlot(symbol);
+   if(idx < 0 || !g_ltm_streak[idx].active) return normalMax;
+
+   // Check if 1-hour window has expired
+   if(TimeGMT() >= g_ltm_streak[idx].startTime + g_ltm_streakMins * 60)
+   {
+      g_ltm_streak[idx].active = false;
+      g_ltm_streak[idx].wins   = 0;
+      Print(StringFormat("StreakMode [%s]: 1-hour window expired — returning to normal position cap (%d)",
+                          symbol, normalMax));
+      return normalMax;
+   }
+
+   return g_ltm_streakMax;
 }
 
 //--------------------------------------------------------------------
@@ -120,7 +356,8 @@ void LTM_RemoveTrade(ulong ticket)
 }
 
 //--------------------------------------------------------------------
-//  Sync: remove any trades that are no longer open (SL/TP/trail)
+//  Sync: remove any trades no longer open and report win/loss result.
+//  This is where Feature 1 and Feature 2 counters get updated.
 //--------------------------------------------------------------------
 void LTM_SyncClosed(string symbol)
 {
@@ -129,7 +366,30 @@ void LTM_SyncClosed(string symbol)
    {
       if(!g_ltm_trades[i].active || g_ltm_trades[i].symbol != symbol) continue;
       if(!PositionSelectByTicket(g_ltm_trades[i].ticket))
+      {
+         // Position is gone — determine result from deal history
+         double closedProfit = 0;
+         if(HistorySelectByPosition(g_ltm_trades[i].ticket))
+         {
+            int deals = HistoryDealsTotal();
+            for(int d = 0; d < deals; d++)
+            {
+               ulong dticket = HistoryDealGetTicket(d);
+               if(HistoryDealGetInteger(dticket, DEAL_ENTRY) == DEAL_ENTRY_OUT ||
+                  HistoryDealGetInteger(dticket, DEAL_ENTRY) == DEAL_ENTRY_INOUT)
+                  closedProfit += HistoryDealGetDouble(dticket, DEAL_PROFIT)
+                                + HistoryDealGetDouble(dticket, DEAL_SWAP)
+                                + HistoryDealGetDouble(dticket, DEAL_COMMISSION);
+            }
+         }
+
+         if(closedProfit >= 0)
+            LTM_RecordWin(symbol);
+         else
+            LTM_RecordLoss(symbol);
+
          g_ltm_trades[i].active = false;
+      }
    }
 }
 
@@ -284,8 +544,6 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
       }
       else if(ajPatternExit && !retracedMostOfGain && !signalFlipped)
       {
-         // Rules 1 & 2 not triggered, but journal history says this trade looks
-         // like the ones that fail. Exit at a small gain before the pattern completes.
          closeReason = "LTM_AJ_PATTERN";
          shouldClose = true;
       }
@@ -314,7 +572,6 @@ void LTM_ManagePositions(string symbol, ENUM_TIMEFRAMES tf,
       }
       else if(g_debugMode)
       {
-         // monitoringActive is always true here (false branch was continue'd above)
          DBG(StringFormat("LTM: #%I64u MONITORED | MFE=%.5f (%.0f%% TP1) | "
                            "excursion=%.5f | signal=%+d conf=%d | bars=%d | HOLD",
                             g_ltm_trades[i].ticket,

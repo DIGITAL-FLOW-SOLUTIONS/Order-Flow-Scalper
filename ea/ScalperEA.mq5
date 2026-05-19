@@ -111,6 +111,23 @@ input double   InpLTM_MFEThresh   = 0.50;        // MFE % of TP1 to activate mon
 input double   InpLTM_RetracePct  = 0.80;        // Close if price retraces this fraction of MFE
 input int      InpLTM_FlipConf    = 2;           // Min confluence required for signal-flip close
 
+// === Streak Mode (Feature 1) ===
+// After N consecutive wins on a pair, the position cap is temporarily raised
+// so the EA takes more trades while conditions are hot. Resets on first loss
+// or after the time window expires. Risk per position stays at InpRiskPct.
+input group "=== Streak Mode ==="
+input bool     InpStreakEnabled   = true;         // Enable streak mode
+input int      InpStreak_MinWins  = 2;            // Consecutive wins needed to activate
+input int      InpStreak_MaxPos   = 5;            // Min extra positions in streak mode
+input int      InpStreak_CapPos   = 10;           // Hard cap on positions during streak
+input int      InpStreak_Mins     = 60;           // Streak window duration (minutes)
+
+// === Loss Suspension (Feature 2) ===
+// Escalating cooldown after consecutive losses on a pair within one trading day.
+// 1st loss: 30-min break. 2nd loss: 60-min break. 3rd loss: suspended until midnight UTC.
+input group "=== Loss Suspension ==="
+input bool     InpSuspendEnabled  = true;         // Enable loss-based suspension
+
 //====================================================================
 //  GLOBAL STATE
 //====================================================================
@@ -352,7 +369,8 @@ int OnInit()
       AJ_Init(_Symbol, InpJournalFile);
 
    if(InpLTMEnabled)
-      LTM_Init(InpLTM_MFEThresh, InpLTM_RetracePct, InpLTM_FlipConf);
+      LTM_Init(InpLTM_MFEThresh, InpLTM_RetracePct, InpLTM_FlipConf,
+               InpStreak_MinWins, InpStreak_MaxPos, InpStreak_CapPos, InpStreak_Mins);
 
    Print("ScalperEA v2.00 initialised on ", Symbol(),
          " | OF TF: ", EnumToString(g_ofTF),
@@ -549,10 +567,33 @@ void OnTick()
       return;
    }
 
-   // ---- Entry logic ----
-   if(openPos >= InpMaxPositions)
+   // ---- Feature 2: Loss Suspension — skip entry if pair is in cooldown ----
+   if(InpSuspendEnabled && InpLTMEnabled && LTM_IsSuspended(symbol))
    {
-      DBG(StringFormat("Max positions (%d) already open → no new entry", InpMaxPositions));
+      int si = LTM_SuspendSlot(symbol);
+      if(si >= 0)
+      {
+         if(g_ltm_suspend[si].dayBanned)
+            DBG(StringFormat("LossSuspend [%s]: pair BANNED for today — skipping entry", symbol));
+         else
+            DBG(StringFormat("LossSuspend [%s]: suspended until %s UTC — skipping entry",
+                              symbol,
+                              TimeToString(g_ltm_suspend[si].resumeTime, TIME_DATE|TIME_MINUTES)));
+      }
+      return;
+   }
+
+   // ---- Entry logic ----
+   // Feature 1: Streak Mode raises the position cap when the pair is on a hot streak.
+   int effectiveMaxPos = InpMaxPositions;
+   if(InpStreakEnabled && InpLTMEnabled)
+      effectiveMaxPos = LTM_GetMaxPositions(symbol, InpMaxPositions);
+
+   if(openPos >= effectiveMaxPos)
+   {
+      DBG(StringFormat("Max positions (%d%s) already open → no new entry",
+                        effectiveMaxPos,
+                        effectiveMaxPos > InpMaxPositions ? " [streak mode]" : ""));
       return;
    }
 
