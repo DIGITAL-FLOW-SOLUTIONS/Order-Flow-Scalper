@@ -121,6 +121,7 @@ input int      InpStreak_MinWins  = 2;            // Consecutive wins needed to 
 input int      InpStreak_MaxPos   = 5;            // Min extra positions in streak mode
 input int      InpStreak_CapPos   = 10;           // Hard cap on positions during streak
 input int      InpStreak_Mins     = 60;           // Streak window duration (minutes)
+input double   InpStreak_TPPips   = 5.0;          // Tight TP for streak positions (pips) — hits in seconds/minutes
 
 // === Loss Suspension (Feature 2) ===
 // Escalating cooldown after consecutive losses on a pair within one trading day.
@@ -747,6 +748,28 @@ void OnTick()
                             "possible regime shift | Reverser: %s",
                              symbol, streak,
                              InpReverser ? "ON (already reversed)" : "OFF"));
+   }
+
+   // ---- Streak Mode: override TP with a tight scalp target ----
+   // During streak mode every additional position uses a small TP that
+   // should be hit in seconds to minutes rather than waiting for the
+   // full ATR-based target. SL stays unchanged for proper risk control.
+   bool inStreakMode = InpStreakEnabled && InpLTMEnabled
+                      && (effectiveMaxPos > InpMaxPositions);
+   if(inStreakMode && InpStreak_TPPips > 0)
+   {
+      int    digits    = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      bool   oddDigits = (digits % 2 == 1);
+      double pip       = SymbolInfoDouble(symbol, SYMBOL_POINT) * (oddDigits ? 10.0 : 1.0);
+      double streakTP  = InpStreak_TPPips * pip;
+
+      if(sig.direction > 0)
+         sig.tp1 = NormalizeDouble(sig.entryPrice + streakTP, digits);
+      else
+         sig.tp1 = NormalizeDouble(sig.entryPrice - streakTP, digits);
+
+      Print(StringFormat("StreakMode [%s]: tight TP applied — %.1f pips (%.5f) instead of normal TP1=%.5f",
+                          symbol, InpStreak_TPPips, streakTP, sig.tp1));
    }
 
    // ---- Signal confirmed — log and place trade ----
